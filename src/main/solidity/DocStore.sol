@@ -12,11 +12,14 @@ contract DocHashStore {
   bytes32[] public docHashes;
   mapping ( bytes32 => Record ) private records;
   mapping ( address => bool ) public authorized;
+  uint public openTime;
+  uint public closeTime;
   bool public closed;
 
-  constructor( address _admin ) public {
-    admin = _admin;
-    closed = false;
+  constructor() public {
+    admin    = msg.sender;
+    openTime = block.timestamp;
+    closed   = false;
   }
 
   modifier onlyAdmin {
@@ -25,6 +28,7 @@ contract DocHashStore {
   }
 
   function close() public onlyAdmin {
+    closeTime = block.timestamp;
     closed = true;
   }
 
