@@ -13,7 +13,7 @@ import scala.util.control.NonFatal
 
 object DirectoryDocStore {
   def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover ) : Failable[DirectoryDocStore] = Failable {
-    new DirectoryDocStore( dir.getAbsoluteFile, hasher, putApprover )
+    new DirectoryDocStore( dir.getCanonicalFile, hasher, putApprover )
   }
 }
 final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover ) extends DocStore.Abstract( hasher, putApprover ) {
@@ -25,11 +25,13 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
       val hashHex = hash.hex
       val mainFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
-      mainFile.replaceContents( data )
-      borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
-        metadata.store( os, s"Metadata for 0x${hashHex}" )
+      mainFile.getCanonicalPath().intern().synchronized {
+        mainFile.replaceContents( data )
+        borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
+          metadata.store( os, s"Metadata for 0x${hashHex}" )
+        }
+        DocStore.PutResponse.Success( hash )
       }
-      DocStore.PutResponse.Success( hash )
     }
     catch {
       case NonFatal( t ) => DocStore.Error( t.getMessage(), Some(t) )
@@ -42,15 +44,17 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
       val mainFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
 
-      val data = mainFile.contentsAsByteSeq
-      val metadata = {
-        val raw = new Properties
-        borrow( new BufferedInputStream( new FileInputStream( metadataFile ) ) ) { is =>
-          raw.load(is)
+      mainFile.getCanonicalPath().intern().synchronized {
+        val data = mainFile.contentsAsByteSeq
+        val metadata = {
+          val raw = new Properties
+          borrow( new BufferedInputStream( new FileInputStream( metadataFile ) ) ) { is =>
+            raw.load(is)
+          }
+          raw
         }
-        raw
+        DocStore.GetResponse.Success( data, metadata )
       }
-      DocStore.GetResponse.Success( data, metadata )
     }
     catch {
       case NonFatal( t ) => DocStore.Error( t.getMessage(), Some(t) )
