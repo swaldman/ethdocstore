@@ -17,6 +17,8 @@ object DocStore {
 
   final object PutCheck {
     case object Success extends PutCheck
+
+    val AlwaysSucceed : PutApprover = _ => Success
   }
   sealed trait PutCheck
 
@@ -24,7 +26,7 @@ object DocStore {
   case class Error( message : String, cause : Option[Throwable] = None ) extends GetResponse with PutResponse
 
   type Hasher      = immutable.Seq[Byte] => immutable.Seq[Byte] // data => hash
-  type PutApprover = immutable.Seq[Byte] => PutCheck
+  type PutApprover = immutable.Seq[Byte] => PutCheck            // hash => PutCheck
 
   abstract class Abstract( hasher : Hasher, putApprover : PutApprover ) extends DocStore {
     protected def store( hash : immutable.Seq[Byte], data : immutable.Seq[Byte], metadata : Properties ) : DocStore.PutResponse

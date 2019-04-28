@@ -12,7 +12,7 @@ import scala.collection._
 import scala.util.control.NonFatal
 
 object DirectoryDocStore {
-  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover ) : Failable[DirectoryDocStore] = Failable {
+  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = DocStore.PutCheck.AlwaysSucceed ) : Failable[DirectoryDocStore] = Failable {
     new DirectoryDocStore( dir.getCanonicalFile, hasher, putApprover )
   }
 }
