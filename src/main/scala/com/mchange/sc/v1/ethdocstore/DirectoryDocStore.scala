@@ -57,7 +57,8 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
       }
     }
     catch {
-      case NonFatal( t ) => DocStore.Error( t.getMessage(), Some(t) )
+      case fnfe : FileNotFoundException => DocStore.GetResponse.NotFound
+      case NonFatal( t )                => DocStore.Error( t.getMessage(), Some(t) )
     }
   }
 }

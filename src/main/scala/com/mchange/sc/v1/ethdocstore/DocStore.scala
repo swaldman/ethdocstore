@@ -12,6 +12,7 @@ object DocStore {
 
   final object GetResponse {
     case class Success( data : immutable.Seq[Byte], metadata : Properties ) extends GetResponse
+    case object NotFound extends GetResponse
   }
   sealed trait GetResponse
 
