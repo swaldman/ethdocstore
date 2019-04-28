@@ -6,7 +6,12 @@ contract DocHashStore {
     string  name;
     string  description;
     address filer;
+    address lastAmender;
+    uint    recordLastModifiedBlockNumber;
   }
+
+  event Stored( uint timestamp, string name, string description, address filer );
+  event Amended( string name, string description, address updater, uint priorUpdateBlockNumber );
 
   address public admin;
   bytes32[] public docHashes;
@@ -43,9 +48,25 @@ contract DocHashStore {
   function store( bytes32 docHash, string memory name, string memory description ) public {
     require( !closed, "This DocHashStore has been closed." );
     require( msg.sender == admin || authorized[ msg.sender ], "The sender is not authorized to modiy this DocHashStore." );
+    require( records[ docHash ].timestamp == 0, "DocHash has already been stored." );
     
-    records[docHash] = Record( block.timestamp, name, description, msg.sender );
+    records[docHash] = Record( block.timestamp, name, description, msg.sender, msg.sender, block.number );
     docHashes.push( docHash );
+
+    emit Stored( block.timestamp, name, description, msg.sender );
+  }
+  
+  function amend( bytes32 docHash, string memory name, string memory description ) public {
+    require( !closed, "This DocHashStore has been closed." );
+    require( msg.sender == admin || authorized[ msg.sender ], "The sender is not authorized to modiy this DocHashStore." );
+    require( records[ docHash ].timestamp != 0, "DocHash has not been defined, must be stored, can't be amended." );
+
+    Record memory oldRecord = records[docHash]; // important that we copy to memory!
+    Record memory newRecord = Record( oldRecord.timestamp, name, description, oldRecord.filer, msg.sender, block.number );
+    
+    records[docHash] = newRecord;
+
+    emit Amended( name, description, msg.sender, oldRecord.recordLastModifiedBlockNumber );
   }
   
   function isStored( bytes32 docHash ) public view returns (bool) {
