@@ -1,6 +1,6 @@
 package com.mchange.sc.v1.ethdocstore.http
 
-import com.mchange.sc.v1.ethdocstore.contract.DocHashStore
+import com.mchange.sc.v1.ethdocstore.contract.AsyncDocHashStore
 
 import akka.actor.{ ActorRef, ActorSystem }
 
@@ -51,6 +51,8 @@ object AkkaHttpServer {
 
   case class ContractLocation( nodeUrl : String, chainId : EthChainId, address : EthAddress )
 
+  case class DocRecord( docHash : sol.Bytes32, docHashName : sol.String, docHashDescription : String, docHashTimestamp : sol.UInt )
+
   def main( argv : Array[String]) : Unit = {
     val config = TSConfigFactory.load()
 
@@ -85,7 +87,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
   private lazy val docStore = EthHashDirectoryDocStore( ethHashDocStoreDir ).assert
 
   private lazy val mbDocHashStore = mbContractLocation map { loc =>
-    DocHashStore.build( jsonRpcUrl = loc.nodeUrl, chainId = Some( loc.chainId ), contractAddress = loc.address )
+    AsyncDocHashStore.build( jsonRpcUrl = loc.nodeUrl, chainId = Some( loc.chainId ), contractAddress = loc.address )
   }
 
   lazy val routes : Route = {
@@ -147,48 +149,68 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
             mbDocHashStore match {
               case None => HttpResponse( status = StatusCodes.NotImplemented )
               case Some( docHashStore ) => {
-                import scalatags.Text.all._
                 implicit val sender = stub.Sender.Default
-                val text = {
-                  html(
-                    head(
-                      tag("title")("Documents")
-                    ),
-                    body(
-                      h1(id:="mainTitle", "Documents"),
-                      div(
-                        cls:="allDocHashes",
-                        for {
-                          i <- BigInt(0) until docHashStore.constant.size().widen
-                          docHash = docHashStore.constant.docHashes(sol.UInt(i))
-                        } yield {
+                implicit val executionContext = ec
+
+                docHashStore.constant.size() flatMap { sz =>
+                  val frecs = {
+                    for {
+                      i <- BigInt(0) until sz.widen
+                    } yield {
+                      for {
+                        docHash <- docHashStore.constant.docHashes(sol.UInt(i))
+                        docHashName <- docHashStore.constant.name( docHash )
+                        docHashDescription <- docHashStore.constant.description( docHash )
+                        docHashTimestamp <- docHashStore.constant.timestamp( docHash )
+                      }
+                      yield {
+                        DocRecord( docHash, docHashName, docHashDescription, docHashTimestamp )
+                      }
+                    }
+                  }
+                  Future.sequence( frecs ) map { seq =>
+                    import scalatags.Text.all._
+                    val text = {
+                      html(
+                        head(
+                          tag("title")("Documents")
+                        ),
+                        body(
+                          h1(id:="mainTitle", "Documents"),
                           div(
-                            cls:="docHashItems",
-                            div(
+                            cls:="allDocHashes",
+                            for {
+                              DocRecord( docHash, docHashName, docHashDescription, docHashTimestamp ) <- seq
+                            } yield {
                               div(
-                                cls:="docHash",
-                                "0x"+docHash.widen.hex
-                              ),
-                              div(
-                                cls:="docHashName",
-                                docHashStore.constant.name( docHash )
-                              ),
-                              div(
-                                cls:="docHashTimestamp",
-                                DateTimeFormatter.ISO_INSTANT.format( Instant.ofEpochSecond(docHashStore.constant.timestamp( docHash ).widen.toLong) )
-                              ),
-                              div(
-                                cls:="docHashDescription",
-                                docHashStore.constant.description( docHash )
+                                cls:="docHashItems",
+                                div(
+                                  div(
+                                    cls:="docHash",
+                                    "0x"+docHash.widen.hex
+                                  ),
+                                  div(
+                                    cls:="docHashName",
+                                    docHashName
+                                  ),
+                                  div(
+                                    cls:="docHashTimestamp",
+                                    DateTimeFormatter.ISO_INSTANT.format( Instant.ofEpochSecond(docHashTimestamp.widen.toLong) )
+                                  ),
+                                  div(
+                                    cls:="docHashDescription",
+                                    docHashDescription
+                                  )
+                                )
                               )
-                            )
+                            }
                           )
-                        }
+                        )
                       )
-                    )
-                  ).toString
+                    }.toString
+                    HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
+                  }
                 }
-                HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
               }
             }
           }
