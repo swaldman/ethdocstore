@@ -15,11 +15,12 @@ contract DocHashStore {
 
   address public admin;
   bytes32[] public docHashes;
-  mapping ( bytes32 => Record ) private records;
   mapping ( address => bool ) public authorized;
   uint public openTime;
   uint public closeTime;
   bool public closed;
+
+  mapping ( bytes32 => Record ) private records;
 
   constructor() public {
     admin    = msg.sender;
@@ -87,5 +88,9 @@ contract DocHashStore {
   
   function filer( bytes32 docHash ) public view returns (address) {
     return records[ docHash ].filer;
+  }
+
+  function size() public view returns (uint) {
+    return docHashes.length;
   }
 }

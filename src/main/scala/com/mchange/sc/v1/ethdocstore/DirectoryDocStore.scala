@@ -11,8 +11,10 @@ import com.mchange.sc.v3.failable._
 import scala.collection._
 import scala.util.control.NonFatal
 
+import DocStore.{PutResponse,GetResponse,PutCheck}
+
 object DirectoryDocStore {
-  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = DocStore.PutCheck.AlwaysSucceed ) : Failable[DirectoryDocStore] = Failable {
+  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = PutCheck.AlwaysSucceed ) : Failable[DirectoryDocStore] = Failable {
     new DirectoryDocStore( dir.getCanonicalFile, hasher, putApprover )
   }
 }
@@ -30,11 +32,11 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
         borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
           metadata.store( os, s"Metadata for 0x${hashHex}" )
         }
-        DocStore.PutResponse.Success( hash )
+        PutResponse.Success( hash )
       }
     }
     catch {
-      case NonFatal( t ) => DocStore.Error( t.getMessage(), Some(t) )
+      case NonFatal( t ) => PutResponse.Error( t.getMessage(), Some(t) )
     }
   }
 
@@ -53,12 +55,12 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
           }
           raw
         }
-        DocStore.GetResponse.Success( data, metadata )
+        GetResponse.Success( data, metadata )
       }
     }
     catch {
-      case fnfe : FileNotFoundException => DocStore.GetResponse.NotFound
-      case NonFatal( t )                => DocStore.Error( t.getMessage(), Some(t) )
+      case fnfe : FileNotFoundException => GetResponse.NotFound
+      case NonFatal( t )                => GetResponse.Error( t.getMessage(), Some(t) )
     }
   }
 }

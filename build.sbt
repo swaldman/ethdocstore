@@ -11,13 +11,17 @@ libraryDependencies ++= Seq(
   "com.mchange" %% "consuela" % "0.0.13",
   "com.mchange" %% "mchange-commons-scala" % "0.4.10-SNAPSHOT" changing(),
   "com.mchange" %% "failable" % "0.0.3",
+  "com.lihaoyi" %% "scalatags" % "0.6.7",
   "com.typesafe.akka" %% "akka-http"            % akkaHttpVersion,
   "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
   "com.typesafe.akka" %% "akka-http-xml"        % akkaHttpVersion,
-  "com.typesafe.akka" %% "akka-stream"          % akkaVersion
+  "com.typesafe.akka" %% "akka-stream"          % akkaVersion,
+  "com.typesafe" % "config" % "1.3.4"
 )
 
 ethcfgScalaStubsPackage := "com.mchange.sc.v1.ethdocstore.contract"
+
+Compile / unmanagedResourceDirectories += { baseDirectory.value / "conf" }
 
 // repositories stuff
 
@@ -27,3 +31,4 @@ val nexusReleases = nexus + "service/local/staging/deploy/maven2";
 
 resolvers += ("releases" at nexusReleases)
 resolvers += ("snapshots" at nexusSnapshots)
+

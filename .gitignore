@@ -4,3 +4,4 @@ target/*
 .DS_Store
 tmp/*
 sbt-ethereum.log
+conf/application.conf

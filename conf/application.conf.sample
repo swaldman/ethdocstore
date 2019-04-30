@@ -1,0 +1,17 @@
+ethdocstore {
+  contract {
+    address = "0x489aad04bf2a43b848126c6dbed7ef656669d49c"
+  }
+  node {
+    url     = "http://mainnet.infura.io/v3/b77bd1c5815baee07d620f8bbecda232"
+    chainId = 1
+  }
+  http {
+    server {
+      clientUrl = "https://www.acme.biz/"
+      port = 7234
+      localStorageDirectory = "/home/acmeDocStore"
+    }
+  }
+}
+
