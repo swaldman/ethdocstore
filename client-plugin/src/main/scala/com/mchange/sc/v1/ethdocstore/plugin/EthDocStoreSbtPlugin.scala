@@ -6,6 +6,7 @@ import sbt._
 import sbt.Keys._
 import sbt.plugins.JvmPlugin
 import sbt.Def.Initialize
+import sbt.complete.Parser
 import sbt.complete.DefaultParsers._
 
 import java.io.File
@@ -24,7 +25,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
 
   object autoImport {
     val webServiceUrl = settingKey[String]("URL of the ethdocstore web service.")
-    val docHashStoreAddress = settingKey[EthAddress]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
+    val docHashStoreAddress = settingKey[String]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
 
     val ingestFilePdf = inputKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage, marks as a PDF file.")
   }
@@ -32,13 +33,23 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
   import autoImport._
 
   lazy val defaults : Seq[sbt.Def.Setting[_]] = Seq(
-    Compile / ingestFilePdf := ingestFileTask( "application/pdf" )( Compile )
+    Compile / ingestFilePdf := { ingestFileTask( "application/pdf" )( Compile ).evaluated },
   )
 
   private def ingestFileTask( contentType : String )( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
     val log = streams.value.log
     val wsUrl = webServiceUrl.value
-    val (( name, description), filePath ) = ((Space ~> NotSpace).examples("<name>") ~ (Space ~> NotSpace).examples("<description>") ~ (Space ~> (any.+).map( _.mkString.trim ).examples("<file-path>"))).parsed
+
+    val ( name, description, filePath ) = {
+      for {
+        name <- Space ~> token(NotSpace, "<name>")
+        desc <- Space ~> token(StringEscapable, "<quoted-description>")
+        filePath <- Space ~> token((any.+).map( _.mkString.trim ),"<file-path>")
+      } yield {
+        ( name, desc, filePath )
+      }
+    }.parsed
+
     val file = new File( filePath ).getAbsoluteFile()
 
     val hash = doStoreFile( log, wsUrl, contentType, file )
@@ -65,7 +76,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     if (! file.canRead()) throw new Exception( s"File '${file}' is not readable." )
     val fileBytes = file.contentsAsByteArray
 
-    borrow( mkConn( "data-store/post" ) )( _.disconnect() ) { conn =>
+    borrow( mkConn( "doc-store/post" ) )( _.disconnect() ) { conn =>
       conn.setRequestMethod( "POST" )
       conn.setRequestProperty( "Content-Type", contentType )
       conn.setDoInput( true )

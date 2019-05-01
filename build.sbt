@@ -44,5 +44,4 @@ lazy val clientPlugin = (project in file("client-plugin")).dependsOn(root).setti
   name := "ethdocstore-client-plugin",
   sbtPlugin := true,
   addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.10")
-
 )
