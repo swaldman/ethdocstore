@@ -91,6 +91,8 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
     AsyncDocHashStore.build( jsonRpcUrl = loc.nodeUrl, chainId = Some( loc.chainId ), contractAddress = loc.address )
   }
 
+  private lazy val base = if (clientUrl.endsWith("/")) clientUrl else s"${clientUrl}/"
+
   lazy val routes : Route = {
     extractRequestContext { implicit ctx =>
 
@@ -170,10 +172,12 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                   }
                   Future.sequence( frecs ) map { seq =>
                     import scalatags.Text.all._
+                    import scalatags.Text.tags2.title
                     val text = {
                       html(
                         head(
-                          tag("title")("Documents")
+                          title("Documents"),
+                          link(href:="${base}assets/css/index.css", `type`:="text/css; charset=utf-8"),
                         ),
                         body(
                           h1(id:="mainTitle", "Documents"),

@@ -1,3 +1,24 @@
 body {
     background: green;
 }
+.docHashItems {
+    display: grid;
+    grid-template-columns: 25% auto 25%;
+    grid-template-rows: 1em auto;
+}
+.docHashName {
+    grid-column: 1;
+    grid-row:    1;
+}
+.docHash {
+    grid-column: 2;
+    grid-row:    1;
+}
+.docHashTimestamp {
+    grid-column: 3;
+    grid-row:    1;
+}
+.docHashDescription {
+    grid-column: 1 / span 3;
+    grid-row:    1;
+}
