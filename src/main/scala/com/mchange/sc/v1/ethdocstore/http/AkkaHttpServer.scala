@@ -91,7 +91,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
     AsyncDocHashStore.build( jsonRpcUrl = loc.nodeUrl, chainId = Some( loc.chainId ), contractAddress = loc.address )
   }
 
-  private lazy val base = if (clientUrl.endsWith("/")) clientUrl else s"${clientUrl}/"
+  private lazy val urlBase = if (clientUrl.endsWith("/")) clientUrl else s"${clientUrl}/"
 
   lazy val routes : Route = {
     extractRequestContext { implicit ctx =>
@@ -177,7 +177,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                       html(
                         head(
                           title("Documents"),
-                          link(href:="${base}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+                          link(href:=s"${urlBase}assets/css/index.css", `type`:="text/css; charset=utf-8"),
                         ),
                         body(
                           h1(id:="mainTitle", "Documents"),
@@ -190,12 +190,12 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                                 cls:="docHashItems",
                                 div(
                                   div(
-                                    cls:="docHash",
-                                    "0x"+docHash.widen.hex
-                                  ),
-                                  div(
                                     cls:="docHashName",
                                     docHashName
+                                  ),
+                                  div(
+                                    cls:="docHash",
+                                    "0x"+docHash.widen.hex
                                   ),
                                   div(
                                     cls:="docHashTimestamp",
