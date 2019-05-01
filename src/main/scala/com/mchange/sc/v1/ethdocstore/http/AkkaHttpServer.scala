@@ -5,7 +5,7 @@ import com.mchange.sc.v1.ethdocstore.contract.AsyncDocHashStore
 import akka.actor.{ ActorRef, ActorSystem }
 
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{ContentType, HttpEntity, HttpResponse, StatusCodes }
+import akka.http.scaladsl.model.{ContentType, HttpEntity, HttpResponse, HttpCharsets, MediaTypes, StatusCodes }
 import akka.http.scaladsl.model.ContentTypes._
 import akka.http.scaladsl.server.{RequestContext, Route}
 
@@ -30,6 +30,7 @@ import stub.sol
 import com.mchange.sc.v1.ethdocstore._
 
 import com.mchange.sc.v2.lang.ThrowableOps
+import com.mchange.sc.v2.io._
 
 import scala.concurrent.{Await,Future}
 import scala.concurrent.duration.Duration
@@ -213,10 +214,32 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
               }
             }
           }
+        },
+        pathPrefix("assets") {
+          pathPrefix("css") {
+            path(Segment) { resourceName =>
+              pathEnd {
+                complete {
+                  Future {
+                    if ( resourceName.endsWith(".css") ) { // .css files only here
+                      Option( this.getClass().getResourceAsStream( s"/css/${resourceName}") ) match {
+                        case Some( is ) => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( MediaTypes.`text/css` withCharset HttpCharsets.`UTF-8`, is.remainingToByteArray ) )
+                        case None => HttpResponse( status = StatusCodes.NotFound )
+                      }
+                    }
+                    else {
+                      HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, "Only .css files ae permitted from this directory." ) )
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       )
     }
   }
+
   def bind() : Unit = {
     Http().bindAndHandle(routes, iface, port)
 
