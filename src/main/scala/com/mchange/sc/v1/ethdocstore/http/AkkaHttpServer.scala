@@ -226,7 +226,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                 complete {
                   Future {
                     if ( resourceName.endsWith(".css") ) { // .css files only here
-                      Option( this.getClass().getResourceAsStream( s"/css/${resourceName}") ) match {
+                      Option( this.getClass().getResourceAsStream( s"/assets/css/${resourceName}") ) match {
                         case Some( is ) => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( MediaTypes.`text/css` withCharset HttpCharsets.`UTF-8`, is.remainingToByteArray ) )
                         case None => HttpResponse( status = StatusCodes.NotFound )
                       }
