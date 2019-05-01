@@ -91,9 +91,11 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
   }
 
   lazy val routes : Route = {
-    def ec( implicit ctx : RequestContext ) = ctx.executionContext
-
     extractRequestContext { implicit ctx =>
+
+      implicit val ec = ctx.executionContext
+      implicit val sender = stub.Sender.Default
+
       concat(
         pathPrefix("doc-store") {
           concat (
@@ -102,7 +104,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                 post {
                   complete {
                     val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
-                    f_bytestring.map { bytestring =>
+                    f_bytestring map { bytestring =>
                       val data = bytestring.compact.toArray.toImmutableSeq
                       val contentType = ctx.request.entity.contentType.toString
                       val metadata = new Properties()
@@ -114,7 +116,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                         case PutResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                         case PutResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                       }
-                    }( ec )
+                    }
                   }
                 }
               }
@@ -137,7 +139,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                         case GetResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                         case GetResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                       }
-                    }( ec )
+                    }
                   }
                 }
               }
@@ -149,9 +151,6 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
             mbDocHashStore match {
               case None => HttpResponse( status = StatusCodes.NotImplemented )
               case Some( docHashStore ) => {
-                implicit val sender = stub.Sender.Default
-                implicit val executionContext = ec
-
                 docHashStore.constant.size() flatMap { sz =>
                   val frecs = {
                     for {

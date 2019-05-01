@@ -1,0 +1,9 @@
+compile
+project root
+clean
+compile
+clean
+compile
+clean
+root/clean
+compile
