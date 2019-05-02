@@ -149,7 +149,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
             }
           )
         },
-        pathPrefix("index") {
+        pathPrefix("index.html") {
           complete {
             mbDocHashStore match {
               case None => HttpResponse( status = StatusCodes.NotImplemented )
@@ -177,7 +177,7 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                       html(
                         head(
                           title("Documents"),
-                          link(href:=s"${urlBase}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+                          link(rel:="stylesheet", href:=s"${urlBase}assets/css/index.css", `type`:="text/css; charset=utf-8"),
                         ),
                         body(
                           h1(id:="mainTitle", "Documents"),
@@ -189,22 +189,23 @@ class AkkaHttpServer( iface : String, port : Int, ethHashDocStoreDir : File, mbC
                               div(
                                 cls:="docHashItems",
                                 div(
-                                  div(
-                                    cls:="docHashName",
+                                  cls:="docHashName",
+                                  a (
+                                    href:=s"${urlBase}doc-store/get/${docHash.widen.hex}",
                                     docHashName
-                                  ),
-                                  div(
-                                    cls:="docHash",
-                                    "0x"+docHash.widen.hex
-                                  ),
-                                  div(
-                                    cls:="docHashTimestamp",
-                                    DateTimeFormatter.ISO_INSTANT.format( Instant.ofEpochSecond(docHashTimestamp.widen.toLong) )
-                                  ),
-                                  div(
-                                    cls:="docHashDescription",
-                                    docHashDescription
                                   )
+                                ),
+                                div(
+                                  cls:="docHash",
+                                  tag("tt")("0x"+docHash.widen.hex)
+                                ),
+                                div(
+                                  cls:="docHashTimestamp",
+                                  DateTimeFormatter.ISO_INSTANT.format( Instant.ofEpochSecond(docHashTimestamp.widen.toLong) )
+                                ),
+                                div(
+                                  cls:="docHashDescription",
+                                  docHashDescription
                                 )
                               )
                             }

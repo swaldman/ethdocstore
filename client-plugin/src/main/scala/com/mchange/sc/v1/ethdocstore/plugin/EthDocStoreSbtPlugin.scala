@@ -61,7 +61,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     val dhs = DocHashStore( contractAddress ) // uses the stub context from the environment, rather than building one from scratch!
     dhs.transaction.store( hash, name, description )
 
-    log.info("Successfully ingested '${file}' with hash '0x${hash.hex}' and content type '${contentType}'")
+    log.info( s"Successfully ingested '${file}' with hash '0x${hash.hex}' and content type '${contentType}'" )
 
     EthHash.withBytes( hash.widen )
   }
