@@ -18,6 +18,7 @@ import com.mchange.sc.v1.sbtethereum.SbtEthereumPlugin.autoImport._
 import com.mchange.sc.v2.io._
 import com.mchange.sc.v2.lang._
 
+import com.mchange.sc.v1.consuela._
 import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress,EthHash}
 import stub.sol
 
@@ -52,21 +53,21 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
 
     val file = new File( filePath ).getAbsoluteFile()
 
-    val hash = doStoreFile( log, wsUrl, contentType, file )
-
     val contractAddress = docHashStoreAddress.value
+
+    val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file )
 
     implicit val ( sctx, ssender ) = ( config / xethStubEnvironment ).value
 
     val dhs = DocHashStore( contractAddress ) // uses the stub context from the environment, rather than building one from scratch!
     dhs.transaction.store( hash, name, description )
 
-    log.info( s"Successfully ingested '${file}' with hash '0x${hash.hex}' and content type '${contentType}'" )
+    log.info( s"Successfully ingested '${file}' with hash '0x${hash.widen.hex}' and content type '${contentType}'" )
 
     EthHash.withBytes( hash.widen )
   }
 
-  private def doStoreFile( log : sbt.Logger, wsUrl : String, contentType : String, file : File ) : sol.Bytes32 = {
+  private def doStoreFile( log : sbt.Logger, wsUrl : String, contractAddress : String, contentType : String, file : File ) : sol.Bytes32 = {
     val base = if ( wsUrl.endsWith("/") ) wsUrl else wsUrl + "/"
 
     def mkConn( path : String ) = (new URL( s"${base}${path}" )).openConnection().asInstanceOf[HttpURLConnection]
@@ -76,7 +77,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     if (! file.canRead()) throw new Exception( s"File '${file}' is not readable." )
     val fileBytes = file.contentsAsByteArray
 
-    borrow( mkConn( "doc-store/post" ) )( _.disconnect() ) { conn =>
+    borrow( mkConn( s"${contractAddress}/doc-store/post" ) )( _.disconnect() ) { conn =>
       conn.setRequestMethod( "POST" )
       conn.setRequestProperty( "Content-Type", contentType )
       conn.setDoInput( true )
