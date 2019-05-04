@@ -1,23 +1,49 @@
 body {
+    font-family: "Trebuchet MS", Helvetica, sans-serif;
+    font-size: 10pt;
+    background-color: #CCCCFF
+}
+h1 {
+    font-weight: bold;
+    font-size: 14pt;
 }
 .docHashItems {
     display: grid;
     grid-template-columns: 25% 25% auto;
-    grid-template-rows: 1em auto;
+    grid-template-rows: 1.5em auto;
+    background-color: white;
+    border: 2px solid black;
+    margin-bottom: 3px;
+    margin-right: 2em;
 }
 .docHashName {
     grid-column: 1;
     grid-row:    1;
+    border-right: 1px solid gray;
+    border-bottom: 1px solid gray;
+    padding: 3px;
 }
 .docHash {
     grid-column: 3;
     grid-row:    1;
+    font-family: "Lucida Console", Monaco, monospace;
+    border-bottom: 1px solid gray;
+    padding: 3px;
+    font-size: smaller;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
 }
 .docHashTimestamp {
     grid-column: 2;
     grid-row:    1;
+    border-right: 1px solid gray;
+    border-bottom: 1px solid gray;
+    padding: 3px;
 }
 .docHashDescription {
     grid-column: 1 / span 3;
     grid-row:    2;
+    padding: 3px;
+    margin-left: 1em;
 }

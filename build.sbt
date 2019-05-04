@@ -8,6 +8,7 @@ val nexusReleases = nexus + "service/local/staging/deploy/maven2";
 
 val akkaHttpVersion = "10.1.6"
 val akkaVersion     = "2.5.19"
+val circeVersion    = "0.10.0"
 
 // non-auto plugins
 
@@ -36,6 +37,11 @@ lazy val root = (project in file(".")).settings (
     "com.typesafe.akka" %% "akka-stream"          % akkaVersion,
     "com.typesafe" % "config" % "1.3.4"
   ),
+  libraryDependencies ++= Seq(
+    "io.circe" %% "circe-core",
+    "io.circe" %% "circe-generic",
+    "io.circe" %% "circe-parser"
+  ).map(_ % circeVersion),
   ethcfgScalaStubsPackage := "com.mchange.sc.v1.ethdocstore.contract",
   Compile / unmanagedResourceDirectories += { baseDirectory.value / "conf" }
 )

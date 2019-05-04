@@ -1,16 +1,15 @@
 ethdocstore {
-  contract {
-    address = "0x489aad04bf2a43b848126c6dbed7ef656669d49c"
+  contracts {
+    0xf10129a35e1314b0bc21cf2b757ee01e8ca55512 = "/Users/swaldman/tmp/test-ethdocstore"
   }
   node {
-    url     = "http://mainnet.infura.io/v3/b77bd1c5815baee07d620f8bbecda232"
-    chainId = 1
+    url     = "https://ropsten.infura.io/v3/bb1ca4713579450c9acb3f9d4f1f0118"
+    chainId = 3
   }
   http {
     server {
-      clientUrl = "https://www.acme.biz/"
+      path = "/poop/"
       port = 7234
-      localStorageDirectory = "/home/acmeDocStore"
     }
   }
 }

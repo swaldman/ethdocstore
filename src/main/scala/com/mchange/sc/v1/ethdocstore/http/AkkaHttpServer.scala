@@ -7,6 +7,9 @@ import akka.actor.{ ActorRef, ActorSystem }
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{ContentType, HttpEntity, HttpResponse, HttpCharsets, MediaTypes, StatusCodes }
 import akka.http.scaladsl.model.ContentTypes._
+import akka.http.scaladsl.model.headers.`Cache-Control`
+import akka.http.scaladsl.model.headers.CacheDirectives.`no-cache`
+
 import akka.http.scaladsl.server.{RequestContext, Route}
 
 import akka.http.scaladsl.server.Directives._
@@ -22,6 +25,8 @@ import akka.stream.scaladsl.Sink
 import akka.util.ByteString
 
 import com.typesafe.config.{Config => TSConfig, ConfigFactory => TSConfigFactory}
+
+import io.circe._, io.circe.generic.auto._, io.circe.generic.semiauto._, io.circe.parser._, io.circe.syntax._
 
 import com.mchange.sc.v1.consuela._
 import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress, EthChainId}
@@ -39,7 +44,7 @@ import scala.concurrent.{Await,Future}
 import scala.concurrent.duration.Duration
 
 import java.io.File
-import java.time.Instant
+import java.time.{Instant, ZonedDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 
@@ -50,18 +55,30 @@ import DocStore.{PutResponse,GetResponse,PutCheck}
 object AkkaHttpServer {
 
   lazy implicit val logger = mlogger( this )
+
+  implicit val docRecordEncoder : Encoder[DocRecord] = new Encoder[DocRecord] {
+    final def apply( dr : DocRecord ): Json = Json.obj(
+      ("docHash", Json.fromString( dr.docHash.widen.hex )),
+      ("name", Json.fromString( dr.name )),
+      ("description", Json.fromString( dr.description )),
+      ("timestamp", Json.fromBigInt( dr.timestamp.widen ))
+    )
+  }
+
   
   private val ContentTypeKey = "Content-Type"
 
   case class NodeInfo( nodeUrl : String, mbChainId : Option[EthChainId]  )
 
-  case class DocRecord( docHash : sol.Bytes32, docHashName : sol.String, docHashDescription : String, docHashTimestamp : sol.UInt )
+  case class DocRecord( docHash : sol.Bytes32, name : sol.String, description : String, timestamp : sol.UInt )
 
   def main( argv : Array[String]) : Unit = {
     val config = TSConfigFactory.load()
 
     val iface = config.getString( "ethdocstore.http.server.interface" )
     val port  = config.getInt( "ethdocstore.http.server.port" )
+
+    val mbPath = if ( config.hasPath( "ethdocstore.http.server.path" ) ) Some( config.getString( "ethdocstore.http.server.path" ) ) else None
 
     val docStoreDirs = {
       import scala.collection.JavaConverters._
@@ -76,14 +93,14 @@ object AkkaHttpServer {
 
     val nodeInfo = NodeInfo( config.getString( "ethdocstore.node.url" ), Failable( config.getInt( "ethdocstore.node.chainId" ) ).toOption.map( EthChainId.apply(_) ) )
 
-    val server = new AkkaHttpServer( iface, port, docStoreDirs, nodeInfo )
+    val server = new AkkaHttpServer( iface, port, docStoreDirs, nodeInfo, mbPath )
     server.bind()
   }
 }
 
 import AkkaHttpServer._
 
-class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[EthAddress,File], nodeInfo : NodeInfo, mbPathToApp : Option[String] = None) {
+class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[EthAddress,File], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
 
   private lazy implicit val system       : ActorSystem       = ActorSystem("EthDocStoreAkkaHttp")
   private lazy implicit val materializer : ActorMaterializer = ActorMaterializer()
@@ -99,10 +116,15 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
     }
   }
 
+  private lazy val mbNakedPath = {
+    val len = prefix.length
+    if (len > 1 ) Some( prefix.substring(1, len-1) ) else None
+  }
+
   private lazy val docStores = docStoreDirs.map { case ( address, dir ) => ( address, EthHashDirectoryDocStore( dir ).assert ) }
 
-  lazy val routes = mbPathToApp match {
-    case Some( rawPrefix ) => rawPathPrefix( rawPrefix )( withinAppRoutes )
+  lazy val routes = mbNakedPath match {
+    case Some( nakedPath ) => pathPrefix( nakedPath )( withinAppRoutes )
     case None              => withinAppRoutes
   }
 
@@ -112,10 +134,45 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
       implicit val ec = ctx.executionContext
       implicit val sender = stub.Sender.Default
 
+      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreDirs.keySet.map( _.hex )).toSeq
+
       concat(
-        pathPrefix("test"){
+        pathPrefix("index.html") {
           complete {
-            Future( HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `text/plain(UTF-8)`, "Test." ) ) )
+            Future {
+              import scalatags.Text.all._
+              import scalatags.Text.tags2.title
+              val titleStr = "Known DocHashStores"
+              val text = {
+                html(
+                  head(
+                    title( titleStr ),
+                    link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+                  ),
+                  body(
+                    h1( titleStr ),
+                    ul(
+                      for {
+                        dhs <- addressSeq
+                      } yield {
+                        li(
+                          a(
+                            href := s"${prefix}0x${dhs}/index.html",
+                            s"0x${dhs}"
+                          )
+                        )
+                      }
+                    )
+                  )
+                )
+              }.toString
+              HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
+            }
+          }
+        },
+        path("docHashStores.json"){
+          complete {
+            Future( HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/json`, addressSeq.asJson.noSpaces ) ) )
           }
         },
         pathPrefix("assets") {
@@ -161,6 +218,23 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
                 }
                 case Some( docStore ) => {
                   val docHashStore = AsyncDocHashStore.build( jsonRpcUrl = nodeInfo.nodeUrl, chainId = nodeInfo.mbChainId, contractAddress = address )
+                  def fseq : Future[immutable.Seq[DocRecord]] = {
+                    docHashStore.constant.size() flatMap { sz =>
+                      Future.sequence {
+                        for ( i <- (BigInt(0) until sz.widen).reverse ) yield {
+                          for {
+                            docHash <- docHashStore.constant.docHashes(sol.UInt(i))
+                            name <- docHashStore.constant.name( docHash )
+                            description <- docHashStore.constant.description( docHash )
+                            timestamp <- docHashStore.constant.timestamp( docHash )
+                          }
+                          yield {
+                            DocRecord( docHash, name, description, timestamp )
+                          }
+                        }
+                      }
+                    }
+                  }
                   concat(
                     pathPrefix("doc-store") {
                       concat(
@@ -211,70 +285,60 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
                         }
                       )
                     },
+                    path("docHashRecords.json"){
+                      complete {
+                        fseq.map( recseq => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/json`, recseq.asJson.noSpaces ) ).addHeader(`Cache-Control`(`no-cache`) ) )
+                      }
+                    },
                     pathPrefix("index.html") {
                       complete {
-                        println("--> index.html")
-                        docHashStore.constant.size() flatMap { sz =>
-                          val frecs = {
-                            for {
-                              i <- BigInt(0) until sz.widen
-                            } yield {
-                              for {
-                                docHash <- docHashStore.constant.docHashes(sol.UInt(i))
-                                docHashName <- docHashStore.constant.name( docHash )
-                                docHashDescription <- docHashStore.constant.description( docHash )
-                                docHashTimestamp <- docHashStore.constant.timestamp( docHash )
-                              }
-                              yield {
-                                DocRecord( docHash, docHashName, docHashDescription, docHashTimestamp )
-                              }
-                            }
-                          }
-                          Future.sequence( frecs ) map { seq =>
-                            import scalatags.Text.all._
-                            import scalatags.Text.tags2.title
-                            val text = {
-                              html(
-                                head(
-                                  title("Documents"),
-                                  link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
-                                ),
-                                body(
-                                  h1(id:="mainTitle", "Documents"),
-                                  div(
-                                    cls:="allDocHashes",
-                                    for {
-                                      DocRecord( docHash, docHashName, docHashDescription, docHashTimestamp ) <- seq
-                                    } yield {
+                        fseq map { seq =>
+                          import scalatags.Text.all._
+                          import scalatags.Text.tags2.title
+                          val titleStr = s"Hashed Documents (${seq.length} found at 0x${address.hex})"
+                          val text = {
+                            html(
+                              head(
+                                title( titleStr ),
+                                link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+                              ),
+                              body(
+                                h1(id:="mainTitle", titleStr, " ", a( href := s"${prefix}index.html", raw("&uarr;"))),
+                                ol(
+                                  cls:="allDocHashes",
+                                  for {
+                                    DocRecord( docHash, name, description, timestamp ) <- seq
+                                  } yield {
+                                    li (
                                       div(
                                         cls:="docHashItems",
                                         div(
                                           cls:="docHashName",
                                           a (
                                             href:=s"${prefix}0x${address.hex}/doc-store/get/${docHash.widen.hex}",
-                                            docHashName
+                                            name
                                           )
                                         ),
                                         div(
                                           cls:="docHash",
-                                          tag("tt")("0x"+docHash.widen.hex)
+                                          "0x"+docHash.widen.hex
                                         ),
                                         div(
                                           cls:="docHashTimestamp",
-                                          DateTimeFormatter.ISO_INSTANT.format( Instant.ofEpochSecond(docHashTimestamp.widen.toLong) )
+                                          DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
                                         ),
                                         div(
                                           cls:="docHashDescription",
-                                          docHashDescription
+                                          description
                                         )
                                       )
-                                    }
-                                  )
+                                    )
+                                  }
                                 )
                               )
-                            }.toString
-                            HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
-                          }
+                            )
+                          }.toString
+                          HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
                         }
                       }
                     }
