@@ -15,13 +15,13 @@ import scala.concurrent.{blocking, ExecutionContext, Future}
 import scala.util.Failure
 import scala.util.control.NonFatal
 
-import DocStore.{PutResponse,GetResponse,PutCheck}
+import DocStore.{PutResponse,GetResponse,PutApprover}
 
 object DirectoryDocStore {
 
   implicit lazy val logger = mlogger(this)
 
-  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = PutCheck.AlwaysSucceed, postPutHook : PostPutHook = PostPutHook.NoOp )( implicit ec : ExecutionContext ) : Failable[DirectoryDocStore] = {
+  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = PutApprover.AlwaysSucceed, postPutHook : PostPutHook = PostPutHook.NoOp )( implicit ec : ExecutionContext ) : Failable[DirectoryDocStore] = {
     Failable ( new DirectoryDocStore( dir.getCanonicalFile, hasher, putApprover, postPutHook )( ec ) )
   }
   final case class PutRecord( dir : File, hash : immutable.Seq[Byte], data : immutable.Seq[Byte], metadata : Properties, dataFile : File, metadataFile : File )
@@ -49,6 +49,15 @@ object DirectoryDocStore {
   final object PostPutHook {
     private val OK : Future[Unit] = Future.unit
 
+    def apply( key : String ) : PostPutHook = {
+      key.toLowerCase match {
+        case "noop"             => NoOp
+        case "gitaddcommitpush" => GitAddCommitPush
+        case _                  => throw new Exception( s"PostPutHook '${key}' is unknown and not supported." )
+      }
+    }
+    def apply( mbKey : Option[String] ) : PostPutHook = mbKey.fold( NoOp )( key => apply(key) )
+
     val NoOp : PostPutHook = ( pr : PutRecord, ec : ExecutionContext ) => OK
 
     val GitAddCommitPush = ( pr : PutRecord, ec : ExecutionContext ) => Future {
@@ -58,38 +67,31 @@ object DirectoryDocStore {
 
         val processLogger = ProcessLogger( line => DEBUG.log( "GitAddCommitPush - stdout: ${line}" ), line => DEBUG.log( "GitAddCommitPush - stderr: ${line}" ) )
 
-        val f_addDataFile     = relativizePath( pr.dir, pr.dataFile ) map { df => Process("git" :: "add" :: df :: Nil, Some(pr.dir)) }
-        val f_addMetadataFile = relativizePath( pr.dir, pr.metadataFile ) map { mdf => Process("git" :: "add" :: mdf :: Nil, Some(pr.dir)) }
+        blocking {
+          pr.dir.getCanonicalPath.intern.synchronized { // lock on an interned string representing the storage directory
 
-        val adds = immutable.Seq( f_addDataFile, f_addMetadataFile ).filter( _.isSucceeded ).map( _.assert )
-
-        if ( adds.nonEmpty ) {
-          blocking {
-            adds.foreach { add =>
-              val aev = add.!( processLogger );
-              if (aev != 0) {
-                WARNING.log( s"GitAddCommitPush: Add '${add}' failed with exit value ${aev}. See DEBUG logs for output." )
-              }
-            }
-
-            val cev = Process("git" :: "commit" :: "-m" :: s""""Add files for 0x${pr.hash.hex}."""" :: Nil, Some(pr.dir)).!( processLogger )
-            if (cev != 0) {
-              WARNING.log( s"GitAddCommitPush: Commit failed with exit value ${cev}. See DEBUG logs for output." )
+            val aev = Process("git" :: "add" :: "." :: Nil, Some(pr.dir)).!( processLogger )
+            if (aev != 0) {
+              WARNING.log( s"GitAddCommitPush: Add failed with exit value ${aev}. See DEBUG logs for output." )
             }
             else {
-              val pev = Process("git" :: "push" :: Nil, Some(pr.dir)).!( processLogger )
-              if (pev != 0) {
-                WARNING.log( s"GitAddCommitPush: Push failed with exit value ${pev}. See DEBUG logs for output." )
+              val cev = Process("git" :: "commit" :: "-m" :: s""""Add files for 0x${pr.hash.hex}."""" :: Nil, Some(pr.dir)).!( processLogger )
+              if (cev != 0) {
+                WARNING.log( s"GitAddCommitPush: Commit failed with exit value ${cev}. See DEBUG logs for output." )
+              }
+              else {
+                val pev = Process("git" :: "push" :: Nil, Some(pr.dir)).!( processLogger )
+                if (pev != 0) {
+                  WARNING.log( s"GitAddCommitPush: Push failed with exit value ${pev}. See DEBUG logs for output." )
+                }
               }
             }
+
           }
-        }
-        else {
-          WARNING.log( s"GitAddCommitPush: Failed to 'git add' any files after storage. See DEBUG logs for output." )
         }
       }
       else {
-        WARNING.log("File storage directory '${pr.dir}' does not appear to be a git repository. git add / commit / push skipped.")
+        WARNING.log( s"File storage directory '${pr.dir}' does not appear to be a git repository. git add / commit / push skipped." )
       }
     }( ec )
   }
@@ -108,7 +110,7 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
       val hashHex = hash.hex
       val dataFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
-      dataFile.getCanonicalPath().intern().synchronized {
+      dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
         dataFile.replaceContents( data )
         borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
           metadata.store( os, s"Metadata for 0x${hashHex}" )
@@ -132,7 +134,7 @@ final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, pu
       val dataFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
 
-      dataFile.getCanonicalPath().intern().synchronized {
+      dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
         val data = dataFile.contentsAsByteSeq
         val metadata = {
           val raw = new Properties

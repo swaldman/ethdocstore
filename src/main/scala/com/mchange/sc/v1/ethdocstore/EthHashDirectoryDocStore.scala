@@ -10,9 +10,12 @@ import scala.concurrent.ExecutionContext
 
 import java.io.File
 
+import DocStore._
+import DirectoryDocStore._
+
 object EthHashDirectoryDocStore {
-  def apply( dir : File, putApprover : DocStore.PutApprover = DocStore.PutCheck.AlwaysSucceed )( implicit ec : ExecutionContext ) : Failable[DocStore] = Failable.flatCreate {
+  def apply( dir : File, putApprover : PutApprover = PutApprover.AlwaysSucceed, postPutHook : PostPutHook = PostPutHook.NoOp )( implicit ec : ExecutionContext ) : Failable[DocStore] = Failable.flatCreate {
     def hasher( data : immutable.Seq[Byte] ) = EthHash.hash( data ).bytes
-    DirectoryDocStore( dir, hasher, putApprover )
+    DirectoryDocStore( dir, hasher, putApprover, postPutHook )
   }
 }

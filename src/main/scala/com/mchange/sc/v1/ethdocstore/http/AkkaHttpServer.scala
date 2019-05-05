@@ -72,6 +72,8 @@ object AkkaHttpServer {
 
   case class DocRecord( docHash : sol.Bytes32, name : sol.String, description : String, timestamp : sol.UInt )
 
+  case class DocStoreRecord( localDir : File, postPutHook : DirectoryDocStore.PostPutHook )
+
   def main( argv : Array[String]) : Unit = {
     val config = TSConfigFactory.load()
 
@@ -80,27 +82,31 @@ object AkkaHttpServer {
 
     val mbPath = if ( config.hasPath( "ethdocstore.http.server.path" ) ) Some( config.getString( "ethdocstore.http.server.path" ) ) else None
 
-    val docStoreDirs = {
+    val docStoreRecords = {
       import scala.collection.JavaConverters._
 
       val contractConfig = config.getConfig("ethdocstore.contracts")
-      val entrySet = contractConfig.entrySet().asScala
-      val tuples = entrySet.map { entry =>
-        ( EthAddress( entry.getKey() ), new File( entry.getValue().unwrapped().asInstanceOf[String] ) )
+      val keySet = contractConfig.root.keySet.asScala
+      val tuples = keySet.map { contractKey =>
+        val contractAddress = EthAddress( contractKey )
+        val localDir = new File( contractConfig.getString( s"${contractKey}.localDir" ) )
+        val pphKey = s"${contractKey}.postPutHook"
+        val postPutHook = if ( contractConfig.hasPath( pphKey ) ) DirectoryDocStore.PostPutHook( contractConfig.getString( pphKey) ) else DirectoryDocStore.PostPutHook.NoOp
+        ( contractAddress, DocStoreRecord( localDir, postPutHook ) )
       }.toSeq
       immutable.Map( tuples : _* )
     }
 
     val nodeInfo = NodeInfo( config.getString( "ethdocstore.node.url" ), Failable( config.getInt( "ethdocstore.node.chainId" ) ).toOption.map( EthChainId.apply(_) ) )
 
-    val server = new AkkaHttpServer( iface, port, docStoreDirs, nodeInfo, mbPath )
+    val server = new AkkaHttpServer( iface, port, docStoreRecords, nodeInfo, mbPath )
     server.bind()
   }
 }
 
 import AkkaHttpServer._
 
-class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[EthAddress,File], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
+class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
 
   private lazy implicit val system       : ActorSystem       = ActorSystem("EthDocStoreAkkaHttp")
   private lazy implicit val materializer : ActorMaterializer = ActorMaterializer()
@@ -118,10 +124,10 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
 
   private lazy val mbNakedPath = {
     val len = prefix.length
-    if (len > 1 ) Some( prefix.substring(1, len-1) ) else None
+    if ( len > 1 ) Some( prefix.substring(1, len-1) ) else None
   }
 
-  private lazy val docStores = docStoreDirs.map { case ( address, dir ) => ( address, EthHashDirectoryDocStore( dir )( ExecutionContext.global ).assert ) }
+  private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, hook) ) => ( address, EthHashDirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
 
   lazy val routes = mbNakedPath match {
     case Some( nakedPath ) => pathPrefix( nakedPath )( withinAppRoutes )
@@ -134,7 +140,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
       implicit val ec = ctx.executionContext
       implicit val sender = stub.Sender.Default
 
-      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreDirs.keySet.map( _.hex )).toSeq
+      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toSeq
 
       concat(
         pathPrefix("index.html") {

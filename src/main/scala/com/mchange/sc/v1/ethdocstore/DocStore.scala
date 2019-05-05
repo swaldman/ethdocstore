@@ -29,11 +29,14 @@ object DocStore {
     case object Success extends PutCheck
     case class  Forbidden( message : String ) extends PutCheck
 
-    val AlwaysSucceed : PutApprover = _ => Success
   }
   sealed trait PutCheck
 
-  type Hasher      = immutable.Seq[Byte] => immutable.Seq[Byte] // data => hash
+  type Hasher = immutable.Seq[Byte] => immutable.Seq[Byte] // data => hash
+
+  final object PutApprover {
+    val AlwaysSucceed : PutApprover = _ => PutCheck.Success
+  }
   type PutApprover = immutable.Seq[Byte] => PutCheck            // hash => PutCheck
 
   abstract class Abstract( hasher : Hasher, putApprover : PutApprover ) extends DocStore {
