@@ -40,7 +40,7 @@ import com.mchange.sc.v2.io._
 import com.mchange.sc.v3.failable._
 
 import scala.collection._
-import scala.concurrent.{Await,Future}
+import scala.concurrent.{Await,ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 
 import java.io.File
@@ -121,7 +121,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreDirs : immutable.Map[E
     if (len > 1 ) Some( prefix.substring(1, len-1) ) else None
   }
 
-  private lazy val docStores = docStoreDirs.map { case ( address, dir ) => ( address, EthHashDirectoryDocStore( dir ).assert ) }
+  private lazy val docStores = docStoreDirs.map { case ( address, dir ) => ( address, EthHashDirectoryDocStore( dir )( ExecutionContext.global ).assert ) }
 
   lazy val routes = mbNakedPath match {
     case Some( nakedPath ) => pathPrefix( nakedPath )( withinAppRoutes )

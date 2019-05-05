@@ -31,6 +31,7 @@ lazy val root = (project in file(".")).settings (
     "com.mchange" %% "mchange-commons-scala" % "0.4.10-SNAPSHOT" changing(),
     "com.mchange" %% "failable" % "0.0.3",
     "com.lihaoyi" %% "scalatags" % "0.6.7",
+    "com.mchange"    %% "mlog-scala"            % "0.3.11",
     "com.typesafe.akka" %% "akka-http"            % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-http-xml"        % akkaHttpVersion,
