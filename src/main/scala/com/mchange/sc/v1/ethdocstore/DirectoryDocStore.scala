@@ -100,7 +100,12 @@ object DirectoryDocStore {
 
 import DirectoryDocStore._
 
-final class DirectoryDocStore private ( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover, postPutHook : PostPutHook )( implicit ec : ExecutionContext ) extends DocStore.Abstract( hasher, putApprover ) {
+final class DirectoryDocStore private (
+  dir : File,
+  hasher : DocStore.Hasher,
+  putApprover : DocStore.PutApprover,
+  postPutHook : PostPutHook
+)( implicit ec : ExecutionContext ) extends DocStore.Abstract( hasher, putApprover ) {
   if (! (dir.exists || dir.mkdirs)) throw new FileNotFoundException( s"'${dir}' does not exist and cannot be created." )
   if (! dir.isDirectory) throw new IOException("File storage directory '${dir}' must be a directory, is not.")
   if (! (dir.canRead() && dir.canWrite())) throw new IOException( s"'${dir}' must be both readable and writable, is not." )

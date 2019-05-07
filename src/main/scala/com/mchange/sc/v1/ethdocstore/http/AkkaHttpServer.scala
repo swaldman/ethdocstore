@@ -43,7 +43,7 @@ import scala.collection._
 import scala.concurrent.{Await,ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 
-import java.io.File
+import java.io.{IOException, File}
 import java.time.{Instant, ZonedDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
@@ -67,12 +67,13 @@ object AkkaHttpServer {
 
   
   private val ContentTypeKey = "Content-Type"
+  private val VisibilityKey  = "Visibility"
 
   case class NodeInfo( nodeUrl : String, mbChainId : Option[EthChainId]  )
 
   case class DocRecord( docHash : sol.Bytes32, name : sol.String, description : String, timestamp : sol.UInt )
 
-  case class DocStoreRecord( localDir : File, postPutHook : DirectoryDocStore.PostPutHook )
+  case class DocStoreRecord( localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook )
 
   case class RegisterRequest( challengeHex : String, challengeSignatureRSVHex : String, userName : String, password : String )
 
@@ -84,6 +85,25 @@ object AkkaHttpServer {
 
     val mbPath = if ( config.hasPath( "ethdocstore.http.server.path" ) ) Some( config.getString( "ethdocstore.http.server.path" ) ) else None
 
+    def ensureDir( id : String, dir : File ) : File = {
+      if (! (dir.mkdirs() || (dir.exists() && dir.isDirectory()))) {
+        throw new IOException( s"'${id}=${dir}' must be an existing or creatable directory, is not.")
+      }
+      else if (! (dir.canRead() && dir.canWrite())) {
+        throw new IOException( s"'${id}=${dir}' must be readable and writable, is not.")
+      }
+      else {
+        dir
+      }
+    }
+
+    val dataDir = {
+      val id = "ethdocstore.http.server.dataDir"
+      val path = config.getString(id)
+      val dir = new File( path )
+      ensureDir( id, dir )
+    }
+
     val docStoreRecords = {
       import scala.collection.JavaConverters._
 
@@ -91,24 +111,42 @@ object AkkaHttpServer {
       val keySet = contractConfig.root.keySet.asScala
       val tuples = keySet.map { contractKey =>
         val contractAddress = EthAddress( contractKey )
-        val localDir = new File( contractConfig.getString( s"${contractKey}.localDir" ) )
-        val pphKey = s"${contractKey}.postPutHook"
+        val contractDir = {
+          val id = s"contract-0x${contractAddress.hex.toLowerCase}"
+          val dir = new File( dataDir, id )
+          ensureDir( id, dir )
+        }
+        val pphKey   = s"${contractKey}.postPutHook"
         val postPutHook = if ( contractConfig.hasPath( pphKey ) ) DirectoryDocStore.PostPutHook( contractConfig.getString( pphKey) ) else DirectoryDocStore.PostPutHook.NoOp
-        ( contractAddress, DocStoreRecord( localDir, postPutHook ) )
+        val dtpublicKey = s"${contractKey}.defaultToPublic"
+        val defaultToPublic = if ( contractConfig.hasPath( dtpublicKey ) ) contractConfig.getBoolean( dtpublicKey ) else false
+
+        ( contractAddress, DocStoreRecord( contractDir, defaultToPublic, postPutHook ) )
       }.toSeq
       immutable.Map( tuples : _* )
     }
 
+    val authProperties = {
+      val file = new File( dataDir, "auth.properties" )
+      if (! (file.exists() || file.createNewFile())) {
+        throw new IOException( s"File '${file}' does not exist and cannot be created." )
+      }
+      if (! (file.canRead() && file.canWrite())) {
+        throw new IOException( s"File '${file}' is not readable and writable, should be." )
+      }
+      file
+    }
+
     val nodeInfo = NodeInfo( config.getString( "ethdocstore.node.url" ), Failable( config.getInt( "ethdocstore.node.chainId" ) ).toOption.map( EthChainId.apply(_) ) )
 
-    val server = new AkkaHttpServer( iface, port, docStoreRecords, nodeInfo, mbPath )
+    val server = new AkkaHttpServer( iface, port, authProperties, docStoreRecords, nodeInfo, mbPath )
     server.bind()
   }
 }
 
 import AkkaHttpServer._
 
-class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
+class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
 
   private lazy implicit val system       : ActorSystem       = ActorSystem("EthDocStoreAkkaHttp")
   private lazy implicit val materializer : ActorMaterializer = ActorMaterializer()
@@ -129,7 +167,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
     if ( len > 1 ) Some( prefix.substring(1, len-1) ) else None
   }
 
-  private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, hook) ) => ( address, EthHashDirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
+  private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, _, hook) ) => ( address, EthHashDirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
 
   private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 15000, challengeLength = 32 )
 
@@ -243,12 +281,20 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
                           pathEnd {
                             post {
                               complete {
+                                val query = ctx.request.uri.query()
+                                val visibility = {
+                                  query.get("visibility") match {
+                                    case Some( str ) => str.toBoolean
+                                    case None        => docStoreRecords(address).defaultToPublic
+                                  }
+                                }
                                 val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
                                 f_bytestring map { bytestring =>
                                   val data = bytestring.compact.toArray.toImmutableSeq
                                   val contentType = ctx.request.entity.contentType.toString
                                   val metadata = new Properties()
                                   metadata.setProperty( ContentTypeKey, contentType )
+                                  metadata.setProperty( VisibilityKey, visibility.toString )
                                   val putResponse = docStore.put( data, metadata )
                                   putResponse match {
                                     case PutResponse.Success( hash )             => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/octet-stream`, hash.toArray ) )
