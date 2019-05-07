@@ -74,6 +74,8 @@ object AkkaHttpServer {
 
   case class DocStoreRecord( localDir : File, postPutHook : DirectoryDocStore.PostPutHook )
 
+  case class RegisterRequest( challengeHex : String, challengeSignatureRSVHex : String, userName : String, password : String )
+
   def main( argv : Array[String]) : Unit = {
     val config = TSConfigFactory.load()
 
@@ -129,6 +131,8 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
 
   private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, hook) ) => ( address, EthHashDirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
 
+  private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 15000, challengeLength = 32 )
+
   lazy val routes = mbNakedPath match {
     case Some( nakedPath ) => pathPrefix( nakedPath )( withinAppRoutes )
     case None              => withinAppRoutes
@@ -140,39 +144,25 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
       implicit val ec = ctx.executionContext
       implicit val sender = stub.Sender.Default
 
-      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toSeq
+      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toVector
 
       concat(
-        pathPrefix("index.html") {
+        pathPrefix("challenge") {
           complete {
             Future {
-              import scalatags.Text.all._
-              import scalatags.Text.tags2.title
-              val titleStr = "Known DocHashStores"
-              val text = {
-                html(
-                  head(
-                    title( titleStr ),
-                    link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
-                  ),
-                  body(
-                    h1( titleStr ),
-                    ul(
-                      for {
-                        dhs <- addressSeq
-                      } yield {
-                        li(
-                          a(
-                            href := s"${prefix}0x${dhs}/index.html",
-                            s"0x${dhs}"
-                          )
-                        )
-                      }
-                    )
-                  )
-                )
-              }.toString
-              HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
+              HttpResponse( entity = HttpEntity( `application/octet-stream`, challengeManager.newChallenge().toArray ) )
+            }
+          }
+        },
+        pathPrefix("index.html") {
+          complete {
+            produceMainIndex( addressSeq )
+          }
+        },
+        pathPrefix("") { // is there a better way to specify the path "/"?
+          pathEnd {
+            complete {
+              produceMainIndex( addressSeq )
             }
           }
         },
@@ -229,10 +219,10 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
                       Future.sequence {
                         for ( i <- (BigInt(0) until sz.widen).reverse ) yield {
                           for {
-                            docHash <- docHashStore.constant.docHashes(sol.UInt(i))
-                            name <- docHashStore.constant.name( docHash )
+                            docHash     <- docHashStore.constant.docHashes(sol.UInt(i))
+                            name        <- docHashStore.constant.name( docHash )
                             description <- docHashStore.constant.description( docHash )
-                            timestamp <- docHashStore.constant.timestamp( docHash )
+                            timestamp   <- docHashStore.constant.timestamp( docHash )
                           }
                           yield {
                             DocRecord( docHash, name, description, timestamp )
@@ -244,6 +234,11 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
                   concat(
                     pathPrefix("doc-store") {
                       concat(
+                        pathPrefix("register") {
+                          post {
+                            ???
+                          }
+                        },
                         pathPrefix("post") {
                           pathEnd {
                             post {
@@ -298,54 +293,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
                     },
                     pathPrefix("index.html") {
                       complete {
-                        fseq map { seq =>
-                          import scalatags.Text.all._
-                          import scalatags.Text.tags2.title
-                          val titleStr = s"Hashed Documents (${seq.length} found at 0x${address.hex})"
-                          val text = {
-                            html(
-                              head(
-                                title( titleStr ),
-                                link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
-                              ),
-                              body(
-                                h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
-                                ol(
-                                  cls:="allDocHashes",
-                                  for {
-                                    DocRecord( docHash, name, description, timestamp ) <- seq
-                                  } yield {
-                                    li (
-                                      div(
-                                        cls:="docHashItems",
-                                        div(
-                                          cls:="docHashName",
-                                          a (
-                                            href:=s"${prefix}0x${address.hex}/doc-store/get/${docHash.widen.hex}",
-                                            name
-                                          )
-                                        ),
-                                        div(
-                                          cls:="docHash",
-                                          "0x"+docHash.widen.hex
-                                        ),
-                                        div(
-                                          cls:="docHashTimestamp",
-                                          DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
-                                        ),
-                                        div(
-                                          cls:="docHashDescription",
-                                          description
-                                        )
-                                      )
-                                    )
-                                  }
-                                )
-                              )
-                            )
-                          }.toString
-                          HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
-                        }
+                        produceDocStoreIndex( address, fseq )
                       }
                     }
                   )
@@ -355,6 +303,89 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
           }
         }
       )
+    }
+  }
+
+  def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) = {
+    fseq map { seq =>
+      import scalatags.Text.all._
+      import scalatags.Text.tags2.title
+      val titleStr = s"Hashed Documents (${seq.length} found at 0x${docStoreAddress.hex})"
+      val text = {
+        html(
+          head(
+            title( titleStr ),
+            link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+          ),
+          body(
+            h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
+            ol(
+              cls:="allDocHashes",
+              for {
+                DocRecord( docHash, name, description, timestamp ) <- seq
+              } yield {
+                li (
+                  div(
+                    cls:="docHashItems",
+                    div(
+                      cls:="docHashName",
+                      a (
+                        href:=s"${prefix}0x${docStoreAddress.hex}/doc-store/get/${docHash.widen.hex}",
+                        name
+                      )
+                    ),
+                    div(
+                      cls:="docHash",
+                      "0x"+docHash.widen.hex
+                    ),
+                    div(
+                      cls:="docHashTimestamp",
+                      DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
+                    ),
+                    div(
+                      cls:="docHashDescription",
+                      description
+                    )
+                  )
+                )
+              }
+            )
+          )
+        )
+      }.toString
+      HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
+    }
+  }
+
+  def produceMainIndex( addressSeq: immutable.Seq[String] )( implicit ec : ExecutionContext ) = {
+    Future {
+      import scalatags.Text.all._
+      import scalatags.Text.tags2.title
+      val titleStr = "Known DocHashStores"
+      val text = {
+        html(
+          head(
+            title( titleStr ),
+            link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+          ),
+          body(
+            h1( titleStr ),
+            ul(
+              for {
+                dhs <- addressSeq
+              } yield {
+                li(
+                  a(
+                    href := s"${prefix}0x${dhs}/index.html",
+                    s"0x${dhs}"
+                  )
+                )
+              }
+            )
+          )
+        )
+      }.toString
+      HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) )
     }
   }
 

@@ -40,6 +40,9 @@ h1 {
     border-right: 1px solid gray;
     border-bottom: 1px solid gray;
     padding: 3px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
 }
 .docHashDescription {
     grid-column: 1 / span 3;
