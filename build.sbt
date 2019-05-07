@@ -44,7 +44,10 @@ lazy val root = (project in file(".")).settings (
     "io.circe" %% "circe-parser"
   ).map(_ % circeVersion),
   ethcfgScalaStubsPackage := "com.mchange.sc.v1.ethdocstore.contract",
-  Compile / unmanagedResourceDirectories += { baseDirectory.value / "conf" }
+  mappings in Universal += file("conf/application.conf.sample") -> "conf/application.conf",
+  bashScriptExtraDefines += """addJava "-Dconfig.file=${app_home}/../conf/application.conf"""",
+  batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\application.conf""""
+  //Compile / unmanagedResourceDirectories += { baseDirectory.value / "conf" }
 )
 
 lazy val clientPlugin = (project in file("client-plugin")).dependsOn(root).settings (

@@ -309,7 +309,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
                                 link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
                               ),
                               body(
-                                h1(id:="mainTitle", titleStr, " ", a( href := s"${prefix}index.html", raw("&uarr;"))),
+                                h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
                                 ol(
                                   cls:="allDocHashes",
                                   for {
@@ -361,7 +361,7 @@ class AkkaHttpServer( iface : String, port : Int, docStoreRecords : immutable.Ma
   def bind() : Unit = {
     Http().bindAndHandle(routes, iface, port)
 
-    INFO.log(s"Server online at 'http://${iface}:${port}/', application located at path '${prefix}'")
+    INFO.log(s"""Server online at 'http://${iface}:${port}/', application located at path '${prefix}'""")
 
     Await.result(system.whenTerminated, Duration.Inf)
   }
