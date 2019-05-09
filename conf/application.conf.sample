@@ -1,7 +1,8 @@
 ethdocstore {
   contracts {
     0xf10129a35e1314b0bc21cf2b757ee01e8ca55512 {
-      postPutHook = "GitAddCommitPush"
+      defaultToPublic = false
+      postPutHook     = "GitAddCommitPush"
     }
   }
   node {
