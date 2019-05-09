@@ -1,5 +1,6 @@
 package com.mchange.sc.v1.ethdocstore
 
+import java.io._
 import java.util.Properties
 
 import scala.collection._
@@ -12,16 +13,14 @@ object DocStore {
     case class Success( hash : immutable.Seq[Byte] ) extends PutResponse
     case class Forbidden( message : String ) extends PutResponse
     case class Error( message : String, cause : Option[Throwable] = None ) extends PutResponse
-
   }
   sealed trait PutResponse
 
   final object GetResponse {
-    case class  Success( data : immutable.Seq[Byte], metadata : Properties ) extends GetResponse
+    case class  Success( handle : Handle, metadata : Properties ) extends GetResponse
     case object NotFound extends GetResponse
     case class  Forbidden( message : String ) extends GetResponse
     case class  Error( message : String, cause : Option[Throwable] = None ) extends GetResponse
-
   }
   sealed trait GetResponse
 
@@ -38,6 +37,22 @@ object DocStore {
     val AlwaysSucceed : PutApprover = _ => PutCheck.Success
   }
   type PutApprover = immutable.Seq[Byte] => PutCheck            // hash => PutCheck
+
+  object Handle {
+    case class FastFailFile( file : File ) extends Handle {
+      val contentLength = {
+        if (! file.exists() ) throw new FileNotFoundException( s"No such file '${file}'.")
+        if (file.isDirectory() ) throw new IOException( s"'${file}' is a directory, not a document.")
+        Some( file.length )
+      }
+
+      def newInputStream() : InputStream = new FileInputStream( file )
+    }
+  }
+  trait Handle {
+    def newInputStream() : InputStream
+    def contentLength    : Option[Long]
+  }
 
   abstract class Abstract( hasher : Hasher, putApprover : PutApprover ) extends DocStore {
     protected def store( hash : immutable.Seq[Byte], data : immutable.Seq[Byte], metadata : Properties ) : DocStore.PutResponse

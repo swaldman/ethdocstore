@@ -20,7 +20,7 @@ import akka.http.scaladsl.server.directives.RouteDirectives.complete
 import akka.http.scaladsl.server.directives.PathDirectives.path
 
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.Sink
+import akka.stream.scaladsl.{Sink, StreamConverters}
 
 import akka.util.ByteString
 
@@ -43,7 +43,7 @@ import scala.collection._
 import scala.concurrent.{Await,ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 
-import java.io.{IOException, File}
+import java.io.{BufferedInputStream, IOException, File}
 import java.time.{Instant, ZonedDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
@@ -56,22 +56,8 @@ object AkkaHttpServer {
 
   lazy implicit val logger = mlogger( this )
 
-  implicit val docRecordEncoder : Encoder[DocRecord] = new Encoder[DocRecord] {
-    final def apply( dr : DocRecord ): Json = Json.obj(
-      ("docHash", Json.fromString( dr.docHash.widen.hex )),
-      ("name", Json.fromString( dr.name )),
-      ("description", Json.fromString( dr.description )),
-      ("timestamp", Json.fromBigInt( dr.timestamp.widen ))
-    )
-  }
-
-  
   private val ContentTypeKey = "Content-Type"
   private val VisibilityKey  = "Visibility"
-
-  case class NodeInfo( nodeUrl : String, mbChainId : Option[EthChainId]  )
-
-  case class DocRecord( docHash : sol.Bytes32, name : sol.String, description : String, timestamp : sol.UInt )
 
   case class DocStoreRecord( localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook )
 
@@ -139,14 +125,16 @@ object AkkaHttpServer {
 
     val nodeInfo = NodeInfo( config.getString( "ethdocstore.node.url" ), Failable( config.getInt( "ethdocstore.node.chainId" ) ).toOption.map( EthChainId.apply(_) ) )
 
-    val server = new AkkaHttpServer( iface, port, authProperties, docStoreRecords, nodeInfo, mbPath )
+    val OneMB = 1024L * 1024 //hardcoded for now, make a config param soon
+
+    val server = new AkkaHttpServer( iface, port, authProperties, docStoreRecords, OneMB, nodeInfo, mbPath )
     server.bind()
   }
 }
 
 import AkkaHttpServer._
 
-class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
+class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], cacheableDataMaxBytes : Long, nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
 
   private lazy implicit val system       : ActorSystem       = ActorSystem("EthDocStoreAkkaHttp")
   private lazy implicit val materializer : ActorMaterializer = ActorMaterializer()
@@ -190,6 +178,11 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
             Future {
               HttpResponse( entity = HttpEntity( `application/octet-stream`, challengeManager.newChallenge().toArray ) )
             }
+          }
+        },
+        pathPrefix("register") {
+          post {
+            ???
           }
         },
         pathPrefix("index.html") {
@@ -272,20 +265,18 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                   concat(
                     pathPrefix("doc-store") {
                       concat(
-                        pathPrefix("register") {
-                          post {
-                            ???
-                          }
-                        },
                         pathPrefix("post") {
                           pathEnd {
                             post {
-                              complete {
+                              complete { // XXX: place fully in futures domain!
                                 val query = ctx.request.uri.query()
-                                val visibility = {
+                                val visibility : Either[HttpResponse,String] = {
                                   query.get("visibility") match {
-                                    case Some( str ) => str.toBoolean
-                                    case None        => docStoreRecords(address).defaultToPublic
+                                    case Some( v @ "public" )  => Right(v)
+                                    case Some( v @ "private" ) => Right(v)
+                                    case Some( other )         => Left( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) )
+                                    case None if docStoreRecords(address).defaultToPublic => Right("public")
+                                    case None                                             => Right("private")
                                   }
                                 }
                                 val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
@@ -313,12 +304,23 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                               complete {
                                 Future {
                                   docStore.get( hex.decodeHexAsSeq ) match {
-                                    case DocStore.GetResponse.Success( data, metadata ) => {
+                                    case DocStore.GetResponse.Success( handle, metadata ) => {
                                       val metadataContentType = metadata.getProperty( ContentTypeKey )
                                       val contentType = {
                                         if ( metadataContentType == null ) `application/octet-stream` else ContentType.parse( metadataContentType ).right.get
                                       }
-                                      HttpResponse( entity = HttpEntity( contentType, data.toArray ) )
+                                      def chunky = HttpResponse( entity = HttpEntity( contentType, StreamConverters.fromInputStream( () => handle.newInputStream() ) ) ) // sould we make chunk size configurable?
+                                      val mbOut = {
+                                        handle.contentLength.map { len =>
+                                          if ( len > cacheableDataMaxBytes ) {
+                                            chunky
+                                          }
+                                          else {
+                                            HttpResponse( entity = HttpEntity( contentType, new BufferedInputStream( handle.newInputStream() ).remainingToByteArray ) )
+                                          }
+                                        }
+                                      }
+                                      mbOut.getOrElse( chunky )
                                     }
                                     case GetResponse.NotFound                    => HttpResponse( status = StatusCodes.NotFound )
                                     case GetResponse.Error( message, Some( t ) ) => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )

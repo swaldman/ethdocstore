@@ -140,7 +140,7 @@ final class DirectoryDocStore private (
       val metadataFile = new File( dir, hashHex + ".properties" )
 
       dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
-        val data = dataFile.contentsAsByteSeq
+        val handle = DocStore.Handle.FastFailFile( dataFile )
         val metadata = {
           val raw = new Properties
           borrow( new BufferedInputStream( new FileInputStream( metadataFile ) ) ) { is =>
@@ -148,7 +148,7 @@ final class DirectoryDocStore private (
           }
           raw
         }
-        GetResponse.Success( data, metadata )
+        GetResponse.Success( handle, metadata )
       }
     }
     catch {
