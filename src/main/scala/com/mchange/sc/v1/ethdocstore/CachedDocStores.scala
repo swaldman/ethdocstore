@@ -6,7 +6,7 @@ import java.util.Properties
 import scala.collection._
 import scala.concurrent.{blocking, Await, ExecutionContext, Future}
 import scala.concurrent.duration.Duration
-import scala.util.Failure
+import scala.util.{Failure,Success}
 
 import com.mchange.v1.cachedstore._
 
@@ -19,29 +19,30 @@ import DocStore.GetResponse
 object CachedDocStores {
   final case class DocKey( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] )
 
-  final case class UnsuccessfulGetException( getResponse : GetResponse ) extends Exception( s"Unsuccessful DocStore.GetResponse: ${getResponse}" )
-
   final object MiniCache {
     trait Manager[K <: AnyRef,V <: AnyRef] extends CachedStore.Manager {
-      def _isDirty( key : K, cached : V ) : Boolean
-      def _recreateFromKey( key : K ) : V
+      protected def _isDirty( key : K, cached : V ) : Boolean
+      protected def _recreateFromKey( key : K ) : V
 
       final def isDirty( key : Object, cached : Object ) : Boolean = _isDirty( key.asInstanceOf[K], cached.asInstanceOf[V] )
       final def recreateFromKey( key : Object )          : Object  = _recreateFromKey( key.asInstanceOf[K] )
     }
     trait OptFutManager[K <: AnyRef,V0] extends Manager[K,Option[Future[V0]]] {
-      def notFoundOrAlreadyFailed( cached : Option[Future[V0]] ) : Boolean = {
+      protected def uncacheableValue( value : V0 ) = false
+
+      protected def notFoundOrAlreadyFailedOrUncacheableValue( cached : Option[Future[V0]] ) : Boolean = {
         cached match {
           case Some( fut ) => {
             fut.value match {
-              case Some( _ : Failure[Any] ) => true // already failed
-              case _                        => false
+              case Some( _ : Failure[V0] )  => true // already failed
+              case Some( Success( value ) ) => uncacheableValue( value )
+              case None                     => false
             }
           }
           case None => true // not found
         }
       }
-      final def _isDirty( key : K, cached : Option[Future[V0]] ) : Boolean = notFoundOrAlreadyFailed( cached )
+      protected final def _isDirty( key : K, cached : Option[Future[V0]] ) : Boolean = notFoundOrAlreadyFailedOrUncacheableValue( cached )
     }
   }
   // MT: access protected by its own lock
@@ -65,14 +66,17 @@ import CachedDocStores._
 class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo : NodeInfo, cacheableDataMaxBytes : Long )( implicit ec : ExecutionContext ) {
 
   def attemptSynchronousMetadata( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Properties] = {
-    attemptGetResponse( docStoreAddress, docHash ) map { fgr =>
-      Await.result( fgr, Duration.Inf ).metadata
+    attemptGetResponse( docStoreAddress, docHash ) flatMap { f_gr =>
+      Await.result( f_gr, Duration.Inf ) match {
+        case GetResponse.Success( handle, metadata ) => Some( metadata )
+        case _                                       => None
+      }
     }
   }
 
-  def attemptGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Future[DocStore.GetResponse.Success]] = SuccessCache.find( DocKey( docStoreAddress, docHash ) )
+  def attemptGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Future[DocStore.GetResponse]] = GetResponseCache.find( DocKey( docStoreAddress, docHash ) )
 
-  def markDirtyGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Unit = SuccessCache.markDirty( DocKey( docStoreAddress, docHash ) )
+  def markDirtyGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Unit = GetResponseCache.markDirty( DocKey( docStoreAddress, docHash ) )
 
   def attemptDocRecordSeq( docStoreAddress : EthAddress ) : Option[Future[immutable.Seq[DocRecord]]] = DocRecordSeqCache.find( docStoreAddress )
 
@@ -83,18 +87,22 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
   def markDirtyHandleData( handle : DocStore.Handle ) : Unit = HandleDataCache.markDirty( handle )
 
   // MT: access protected by its own lock
-  private final object SuccessCache extends MiniCache[DocKey,Option[Future[GetResponse.Success]]] {
-    protected override val manager = new MiniCache.OptFutManager[DocKey,GetResponse.Success] {
-      def _recreateFromKey( docKey : DocKey ) : Option[Future[GetResponse.Success]] = {
+  private final object GetResponseCache extends MiniCache[DocKey,Option[Future[GetResponse]]] {
+    protected override val manager = new MiniCache.OptFutManager[DocKey,GetResponse] {
+
+      protected override def uncacheableValue( value : GetResponse ) = {
+        value match {
+          case GetResponse.Success( _, _ ) => false
+          case _                           => true
+        }
+      }
+
+      def _recreateFromKey( docKey : DocKey ) : Option[Future[GetResponse]] = {
         docStores.get( docKey.docStoreAddress ).flatMap { docStore =>
           Some(
             Future {
               blocking {
-                import DocStore.GetResponse._
-                docStore.get( docKey.docHash ) match {
-                  case yay : Success             => yay
-                  case unsuccessful              => throw new UnsuccessfulGetException( unsuccessful )
-                }
+                docStore.get( docKey.docHash )
               }
             }
           )

@@ -302,31 +302,7 @@ class AkkaHttpServer(
                               complete {
                                 caches.attemptGetResponse( address, hex.decodeHexAsSeq ) match {
                                   case None => Future( HttpResponse( status = StatusCodes.NotFound ) )
-                                  case Some( f_getResponse ) => {
-                                    f_getResponse flatMap { case DocStore.GetResponse.Success( handle, metadata ) =>
-                                      val metadataContentType = metadata.getProperty( ContentTypeKey )
-                                      val contentType = {
-                                        if ( metadataContentType == null ) `application/octet-stream` else ContentType.parse( metadataContentType ).right.get
-                                      }
-                                      caches.attemptHandleData( handle ) match {
-                                        case Some( f_data ) => f_data.map( data => HttpResponse( entity = HttpEntity( contentType, data.toArray ) ) )
-                                        case None => Future( HttpResponse( entity = HttpEntity( contentType, StreamConverters.fromInputStream( () => handle.newInputStream() ) ) ) ) // should we make chunk size configurable?
-                                      }
-                                    } recover {
-                                      case CachedDocStores.UnsuccessfulGetException( getResponse ) => {
-                                        getResponse match {
-                                          case GetResponse.NotFound                    => HttpResponse( status=StatusCodes.NotFound )
-                                          case GetResponse.Error( message, Some( t ) ) => HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
-                                          case GetResponse.Error( message, None )      => HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message ) )
-                                          case GetResponse.Forbidden( message )        => HttpResponse( status=StatusCodes.Forbidden,           entity=HttpEntity( `text/plain(UTF-8)`, message ) )
-                                          case nevah @ GetResponse.Success( handle, metadata ) => {
-                                            HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, "We should not see GetResponse.Success here! ${nevah}" ) )
-                                          }
-                                        }
-                                      }
-                                      case t => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, t.fullStackTrace ) )
-                                    }
-                                  }
+                                  case Some( f_getResponse ) => handleGetResponse( f_getResponse )
                                 }
                               }
                             }
@@ -354,16 +330,28 @@ class AkkaHttpServer(
     }
   }
 
-  /*
-  def produceDocStoreIndex( docStoreAddress : EthAddress )( implicit ec : ExecutionContext ) : Future[HttpResponse] = {
-    caches.attemptDocRecordSeq( docStoreAddress ) match {
-      case Some( fseq ) => produceDocStoreIndex( docStoreAddress, fseq )
-      case None         => Future( HttpResponse( status = StatusCodes.NotFound ) )
+  private def handleGetResponse( f_getResponse : Future[DocStore.GetResponse] ) : Future[HttpResponse] = {
+    f_getResponse flatMap {
+      case GetResponse.Success( handle, metadata ) => {
+        val metadataContentType = metadata.getProperty( ContentTypeKey )
+        val contentType = {
+          if ( metadataContentType == null ) `application/octet-stream` else ContentType.parse( metadataContentType ).right.get
+        }
+        caches.attemptHandleData( handle ) match {
+          case Some( f_data ) => f_data.map( data => HttpResponse( entity = HttpEntity( contentType, data.toArray ) ) )
+          case None => Future( HttpResponse( entity = HttpEntity( contentType, StreamConverters.fromInputStream( () => handle.newInputStream() ) ) ) ) // should we make chunk size configurable?
+        }
+      }
+      case GetResponse.NotFound                    => Future( HttpResponse( status=StatusCodes.NotFound ) )
+      case GetResponse.Error( message, Some( t ) ) => Future( HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) ) )
+      case GetResponse.Error( message, None )      => Future( HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message ) ) )
+      case GetResponse.Forbidden( message )        => Future( HttpResponse( status=StatusCodes.Forbidden, entity=HttpEntity( `text/plain(UTF-8)`, message ) ) )
+    } recover {
+      case t => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, t.fullStackTrace ) )
     }
   }
-  */ 
 
-  def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
+  private def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
     fseq map { seq =>
       import scalatags.Text.all._
       import scalatags.Text.tags2.title
