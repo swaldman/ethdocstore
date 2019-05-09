@@ -1,9 +1,11 @@
 package com.mchange.sc.v1.ethdocstore
 
 import java.io.BufferedInputStream
+import java.util.Properties
 
 import scala.collection._
-import scala.concurrent.{blocking, ExecutionContext,Future}
+import scala.concurrent.{blocking, Await, ExecutionContext, Future}
+import scala.concurrent.duration.Duration
 import scala.util.Failure
 
 import com.mchange.v1.cachedstore._
@@ -61,6 +63,12 @@ object CachedDocStores {
 import CachedDocStores._
 
 class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo : NodeInfo, cacheableDataMaxBytes : Long )( implicit ec : ExecutionContext ) {
+
+  def attemptSynchronousMetadata( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Properties] = {
+    attemptGetResponse( docStoreAddress, docHash ) map { fgr =>
+      Await.result( fgr, Duration.Inf ).metadata
+    }
+  }
 
   def attemptGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Future[DocStore.GetResponse.Success]] = SuccessCache.find( DocKey( docStoreAddress, docHash ) )
 
