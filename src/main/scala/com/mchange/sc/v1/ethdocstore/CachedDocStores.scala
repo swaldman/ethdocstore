@@ -3,7 +3,7 @@ package com.mchange.sc.v1.ethdocstore
 import java.io.BufferedInputStream
 
 import scala.collection._
-import scala.concurrent.{ExecutionContext,Future}
+import scala.concurrent.{blocking, ExecutionContext,Future}
 import scala.util.Failure
 
 import com.mchange.v1.cachedstore._
@@ -16,6 +16,8 @@ import DocStore.GetResponse
 
 object CachedDocStores {
   final case class DocKey( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] )
+
+  final case class UnsuccessfulGetException( getResponse : GetResponse ) extends Exception( s"Unsuccessful DocStore.GetResponse: ${getResponse}" )
 
   final object MiniCache {
     trait Manager[K <: AnyRef,V <: AnyRef] extends CachedStore.Manager {
@@ -79,12 +81,12 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
         docStores.get( docKey.docStoreAddress ).flatMap { docStore =>
           Some(
             Future {
-              import DocStore.GetResponse._
-              docStore.get( docKey.docHash ) match {
-                case yay : Success             => yay
-                case NotFound                  => throw new Exception( s"Not found! Could not find resource for ${docStore}" )
-                case Forbidden( message )      => throw new Exception( s"Forbidden! Could not fetch data for ${docStore}." )
-                case Error( message, mbCause ) => throw new Exception( s"Error! Could not fetch data for ${docStore}: ${message}", mbCause.getOrElse( null ) )
+              blocking {
+                import DocStore.GetResponse._
+                docStore.get( docKey.docHash ) match {
+                  case yay : Success             => yay
+                  case unsuccessful              => throw new UnsuccessfulGetException( unsuccessful )
+                }
               }
             }
           )
@@ -127,7 +129,7 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
       def _recreateFromKey( handle : DocStore.Handle ) : Option[Future[immutable.Seq[Byte]]] = {
         handle.contentLength flatMap { len =>
           if ( len < cacheableDataMaxBytes ) {
-            Some( Future( new BufferedInputStream( handle.newInputStream() ).remainingToByteSeq ) )
+            Some( Future( blocking ( new BufferedInputStream( handle.newInputStream() ).remainingToByteSeq ) ) )
           }
           else {
             None

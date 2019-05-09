@@ -117,15 +117,33 @@ final class DirectoryDocStore private (
       val metadataFile = new File( dir, hashHex + ".properties" )
       dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
         dataFile.replaceContents( data )
-        borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
-          metadata.store( os, s"Metadata for 0x${hashHex}" )
+
+        val mergedMetadata = {
+          if ( metadataFile.exists() ) {
+            val working = new Properties()
+            Failable {
+              borrow( new BufferedInputStream( new FileInputStream( metadataFile ) ) ) { is =>
+                working.load( is )
+              }
+            }.xwarn("Error loading original metadata. It will be ignored and overwritten!")
+            working.putAll( metadata )
+            metadata
+          }
+          else {
+            metadata
+          }
         }
-        val hookFuture = postPutHook(PutRecord(dir, hash, data, metadata, dataFile, metadataFile), ec)
+
+        borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
+          mergedMetadata.store( os, s"Metadata for 0x${hashHex}" )
+        }
+
+        val hookFuture = postPutHook(PutRecord(dir, hash, data, mergedMetadata, dataFile, metadataFile), ec)
         hookFuture.onComplete {
           case Failure(t) => WARNING.log( "Problem during call to post-put hook.", t )
           case _          => /* ignore */
         }(ec)
-        PutResponse.Success( hash )
+        PutResponse.Success( hash, DocStore.Handle.FastFailFile( dataFile ), mergedMetadata )
       }
     }
     catch {

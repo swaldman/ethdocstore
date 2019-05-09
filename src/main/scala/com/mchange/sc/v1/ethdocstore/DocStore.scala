@@ -10,7 +10,7 @@ import scala.collection._
 
 object DocStore {
   final object PutResponse {
-    case class Success( hash : immutable.Seq[Byte] ) extends PutResponse
+    case class Success( hash : immutable.Seq[Byte], handle : Handle, metadata : Properties ) extends PutResponse
     case class Forbidden( message : String ) extends PutResponse
     case class Error( message : String, cause : Option[Throwable] = None ) extends PutResponse
   }

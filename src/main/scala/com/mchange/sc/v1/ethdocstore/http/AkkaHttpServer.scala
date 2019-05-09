@@ -134,7 +134,15 @@ object AkkaHttpServer {
 
 import AkkaHttpServer._
 
-class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStoreRecords : immutable.Map[EthAddress,DocStoreRecord], cacheableDataMaxBytes : Long, nodeInfo : NodeInfo, mbPathToApp : Option[String] ) {
+class AkkaHttpServer(
+  iface : String,
+  port : Int,
+  authProperties : File,
+  docStoreRecords : immutable.Map[EthAddress, AkkaHttpServer.DocStoreRecord],
+  cacheableDataMaxBytes : Long,
+  nodeInfo : NodeInfo,
+  mbPathToApp : Option[String]
+)( implicit ec : ExecutionContext = ExecutionContext.global ) {
 
   private lazy implicit val system       : ActorSystem       = ActorSystem("EthDocStoreAkkaHttp")
   private lazy implicit val materializer : ActorMaterializer = ActorMaterializer()
@@ -156,6 +164,8 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
   }
 
   private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, _, hook) ) => ( address, EthHashDirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
+
+  private lazy val caches = new CachedDocStores( docStores, nodeInfo, cacheableDataMaxBytes )
 
   private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 15000, challengeLength = 32 )
 
@@ -244,24 +254,7 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                   }
                 }
                 case Some( docStore ) => {
-                  val docHashStore = AsyncDocHashStore.build( jsonRpcUrl = nodeInfo.nodeUrl, chainId = nodeInfo.mbChainId, contractAddress = address )
-                  def fseq : Future[immutable.Seq[DocRecord]] = {
-                    docHashStore.constant.size() flatMap { sz =>
-                      Future.sequence {
-                        for ( i <- (BigInt(0) until sz.widen).reverse ) yield {
-                          for {
-                            docHash     <- docHashStore.constant.docHashes(sol.UInt(i))
-                            name        <- docHashStore.constant.name( docHash )
-                            description <- docHashStore.constant.description( docHash )
-                            timestamp   <- docHashStore.constant.timestamp( docHash )
-                          }
-                          yield {
-                            DocRecord( docHash, name, description, timestamp )
-                          }
-                        }
-                      }
-                    }
-                  }
+                  def fseq : Future[immutable.Seq[DocRecord]] = caches.attemptDocRecordSeq( address ).get // this should be availble, we've checked address first
                   concat(
                     pathPrefix("doc-store") {
                       concat(
@@ -271,7 +264,7 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                               complete { // XXX: place fully in futures domain!
                                 val query = ctx.request.uri.query()
                                 val visibility : Either[HttpResponse,String] = {
-                                  query.get("visibility") match {
+                                  query.get( VisibilityKey ) match {
                                     case Some( v @ "public" )  => Right(v)
                                     case Some( v @ "private" ) => Right(v)
                                     case Some( other )         => Left( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) )
@@ -288,7 +281,12 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                                   metadata.setProperty( VisibilityKey, visibility.toString )
                                   val putResponse = docStore.put( data, metadata )
                                   putResponse match {
-                                    case PutResponse.Success( hash )             => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/octet-stream`, hash.toArray ) )
+                                    case PutResponse.Success( hash, handle, metadata ) => {
+                                      caches.markDirtyGetResponse( address, hash )
+                                      caches.markDirtyDocRecordSeq( address )
+                                      caches.markDirtyHandleData( handle )
+                                      HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/octet-stream`, hash.toArray ) )
+                                    }
                                     case PutResponse.Error( message, Some( t ) ) => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
                                     case PutResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                                     case PutResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
@@ -302,30 +300,32 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
                           path(Segment) { hex =>
                             pathEnd {
                               complete {
-                                Future {
-                                  docStore.get( hex.decodeHexAsSeq ) match {
-                                    case DocStore.GetResponse.Success( handle, metadata ) => {
+                                caches.attemptGetResponse( address, hex.decodeHexAsSeq ) match {
+                                  case None => Future( HttpResponse( status = StatusCodes.NotFound ) )
+                                  case Some( f_getResponse ) => {
+                                    f_getResponse flatMap { case DocStore.GetResponse.Success( handle, metadata ) =>
                                       val metadataContentType = metadata.getProperty( ContentTypeKey )
                                       val contentType = {
                                         if ( metadataContentType == null ) `application/octet-stream` else ContentType.parse( metadataContentType ).right.get
                                       }
-                                      def chunky = HttpResponse( entity = HttpEntity( contentType, StreamConverters.fromInputStream( () => handle.newInputStream() ) ) ) // sould we make chunk size configurable?
-                                      val mbOut = {
-                                        handle.contentLength.map { len =>
-                                          if ( len > cacheableDataMaxBytes ) {
-                                            chunky
-                                          }
-                                          else {
-                                            HttpResponse( entity = HttpEntity( contentType, new BufferedInputStream( handle.newInputStream() ).remainingToByteArray ) )
+                                      caches.attemptHandleData( handle ) match {
+                                        case Some( f_data ) => f_data.map( data => HttpResponse( entity = HttpEntity( contentType, data.toArray ) ) )
+                                        case None => Future( HttpResponse( entity = HttpEntity( contentType, StreamConverters.fromInputStream( () => handle.newInputStream() ) ) ) ) // should we make chunk size configurable?
+                                      }
+                                    } recover {
+                                      case CachedDocStores.UnsuccessfulGetException( getResponse ) => {
+                                        getResponse match {
+                                          case GetResponse.NotFound                    => HttpResponse( status=StatusCodes.NotFound )
+                                          case GetResponse.Error( message, Some( t ) ) => HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
+                                          case GetResponse.Error( message, None )      => HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, message ) )
+                                          case GetResponse.Forbidden( message )        => HttpResponse( status=StatusCodes.Forbidden,           entity=HttpEntity( `text/plain(UTF-8)`, message ) )
+                                          case nevah @ GetResponse.Success( handle, metadata ) => {
+                                            HttpResponse( status=StatusCodes.InternalServerError, entity=HttpEntity( `text/plain(UTF-8)`, "We should not see GetResponse.Success here! ${nevah}" ) )
                                           }
                                         }
                                       }
-                                      mbOut.getOrElse( chunky )
+                                      case t => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, t.fullStackTrace ) )
                                     }
-                                    case GetResponse.NotFound                    => HttpResponse( status = StatusCodes.NotFound )
-                                    case GetResponse.Error( message, Some( t ) ) => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
-                                    case GetResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
-                                    case GetResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
                                   }
                                 }
                               }
@@ -354,7 +354,16 @@ class AkkaHttpServer( iface : String, port : Int, authProperties : File, docStor
     }
   }
 
-  def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) = {
+  /*
+  def produceDocStoreIndex( docStoreAddress : EthAddress )( implicit ec : ExecutionContext ) : Future[HttpResponse] = {
+    caches.attemptDocRecordSeq( docStoreAddress ) match {
+      case Some( fseq ) => produceDocStoreIndex( docStoreAddress, fseq )
+      case None         => Future( HttpResponse( status = StatusCodes.NotFound ) )
+    }
+  }
+  */ 
+
+  def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
     fseq map { seq =>
       import scalatags.Text.all._
       import scalatags.Text.tags2.title
