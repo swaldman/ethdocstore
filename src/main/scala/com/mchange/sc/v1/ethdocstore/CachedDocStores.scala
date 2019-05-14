@@ -2,6 +2,7 @@ package com.mchange.sc.v1.ethdocstore
 
 import java.io.BufferedInputStream
 import java.util.Properties
+import java.util.concurrent.atomic.AtomicReference
 
 import scala.collection._
 import scala.concurrent.{blocking, Await, ExecutionContext, Future}
@@ -14,9 +15,13 @@ import com.mchange.sc.v2.io._
 import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress}, stub.sol
 import com.mchange.sc.v1.ethdocstore.contract.AsyncDocHashStore
 
+import com.mchange.sc.v1.log.MLevel._
+
 import DocStore.GetResponse
 
 object CachedDocStores {
+  lazy implicit val logger = mlogger(this)
+
   final case class DocKey( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] )
 
   final object MiniCache {
@@ -24,8 +29,8 @@ object CachedDocStores {
       protected def _isDirty( key : K, cached : V ) : Boolean
       protected def _recreateFromKey( key : K ) : V
 
-      final def isDirty( key : Object, cached : Object ) : Boolean = _isDirty( key.asInstanceOf[K], cached.asInstanceOf[V] )
-      final def recreateFromKey( key : Object )          : Object  = _recreateFromKey( key.asInstanceOf[K] )
+      final def isDirty( key : Object, cached : Object ) : Boolean = TRACE.logEval( s"dirty? key '${key}', cached: '${cached}'" )(_isDirty( key.asInstanceOf[K], cached.asInstanceOf[V] ) )
+      final def recreateFromKey( key : Object )          : Object  = TRACE.logEval( s"Recreating from key '${key}'" )            ( _recreateFromKey( key.asInstanceOf[K] ) )
     }
     trait OptFutManager[K <: AnyRef,V0] extends Manager[K,Option[Future[V0]]] {
       protected def uncacheableValue( value : V0 ) = false
@@ -45,11 +50,15 @@ object CachedDocStores {
       protected final def _isDirty( key : K, cached : Option[Future[V0]] ) : Boolean = notFoundOrAlreadyFailedOrUncacheableValue( cached )
     }
   }
-  // MT: access protected by its own lock
   private trait MiniCache[K <: AnyRef, V <: AnyRef] {
     protected val manager : MiniCache.Manager[K,V]
 
+    // MT: access protected by its own lock
     private lazy val cachedStore = CachedStoreFactory.createSynchronousCleanupSoftKeyCachedStore( manager )
+
+    def reset() : Unit = this.synchronized {
+      cachedStore.reset()
+    }
 
     def find( k : K ) : V = this.synchronized {
       cachedStore.find( k ).asInstanceOf[V]
@@ -64,6 +73,14 @@ object CachedDocStores {
 import CachedDocStores._
 
 class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo : NodeInfo, cacheableDataMaxBytes : Long )( implicit ec : ExecutionContext ) {
+
+  val docHashStores = docStores.map {
+    case ( k, v ) => ( k, AsyncDocHashStore.build( jsonRpcUrl = nodeInfo.nodeUrl, chainId = nodeInfo.mbChainId, contractAddress = k, eventConfirmations = 0 ) )
+  }
+
+  private val storeWatcher = new StoreWatcher() // don't construct lazily, so we get publishers set up
+
+  private lazy val miniCaches : List[MiniCache[_,_]] = GetResponseCache :: DocRecordSeqCache :: HandleDataCache :: Nil
 
   def attemptSynchronousMetadata( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Properties] = {
     attemptGetResponse( docStoreAddress, docHash ) flatMap { f_gr =>
@@ -86,7 +103,15 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
 
   def markDirtyHandleData( handle : DocStore.Handle ) : Unit = HandleDataCache.markDirty( handle )
 
-  // MT: access protected by its own lock
+  def attemptResource( absoluteResourceKey : String ) : Option[Future[immutable.Seq[Byte]]] = ResourcesCache.find( absoluteResourceKey )
+
+  def markDirtyResource( absoluteResourceKey : String ) : Unit = ResourcesCache.markDirty( absoluteResourceKey )
+
+  def close() : Unit = {
+    miniCaches.foreach( _.reset() )
+    storeWatcher.close()
+  }
+
   private final object GetResponseCache extends MiniCache[DocKey,Option[Future[GetResponse]]] {
     protected override val manager = new MiniCache.OptFutManager[DocKey,GetResponse] {
 
@@ -111,14 +136,13 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
     }
   }
 
-  // MT: access protected by its own lock
   private final object DocRecordSeqCache extends MiniCache[EthAddress,Option[Future[immutable.Seq[DocRecord]]]] {
     protected val manager = new MiniCache.OptFutManager[EthAddress,immutable.Seq[DocRecord]] {
       def _recreateFromKey( address : EthAddress ) : Option[Future[immutable.Seq[DocRecord]]] = {
         docStores.get( address ) map { _ =>
           implicit val sender = stub.Sender.Default
 
-          val docHashStore = AsyncDocHashStore.build( jsonRpcUrl = nodeInfo.nodeUrl, chainId = nodeInfo.mbChainId, contractAddress = address )
+          val docHashStore = docHashStores( address )
           docHashStore.constant.size() flatMap { sz =>
             Future.sequence {
               for ( i <- (BigInt(0) until sz.widen).reverse ) yield {
@@ -139,7 +163,6 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
     }
   }
 
-  // MT: access protected by its own lock
   private final object HandleDataCache extends MiniCache[DocStore.Handle,Option[Future[immutable.Seq[Byte]]]] {
     protected val manager = new MiniCache.OptFutManager[DocStore.Handle,immutable.Seq[Byte]] {
       def _recreateFromKey( handle : DocStore.Handle ) : Option[Future[immutable.Seq[Byte]]] = {
@@ -152,6 +175,86 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
           }
         }
       }
+    }
+  }
+
+  private final object ResourcesCache extends MiniCache[String,Option[Future[immutable.Seq[Byte]]]] {
+    protected val manager = new MiniCache.OptFutManager[String,immutable.Seq[Byte]] {
+      def _recreateFromKey( absoluteResourceKey : String ) : Option[Future[immutable.Seq[Byte]]] = {
+        Option( this.getClass().getResourceAsStream( absoluteResourceKey ) ).map { is =>
+          Future {
+            blocking {
+              new BufferedInputStream( is ).remainingToByteSeq
+            }
+          }
+        }
+      }
+    }
+  }
+
+
+  private class StoreWatcher {
+    import org.reactivestreams._
+    import AsyncDocHashStore.Event._
+
+    // MT: protected by this' lock
+    private val watched = {
+      mutable.Map.empty[EthAddress,AddressSubscriber] ++ docStores.map { case ( addr, _ ) => ( addr, new AddressSubscriber( addr ) ) }
+    }
+
+    def drop( address : EthAddress ) : Unit = this.synchronized {
+      watched.get( address ).foreach( _.unsubscribe() )
+      watched -= address
+    }
+
+    def close() : Unit = this.synchronized {
+      val keys = immutable.Seq.empty ++ watched.keySet
+      keys.foreach( drop )
+    }
+
+    class AddressSubscriber( address : EthAddress ) extends Subscriber[AsyncDocHashStore.Event] {
+      val docHashStore = docHashStores( address )
+      val subscriptionRef = new AtomicReference[Option[Subscription]]( None )
+
+      this.subscribe()
+
+      def subscribe() : Unit = {
+        docHashStore.subscribe( this )
+        INFO.log( s"${this} subscribed." )
+      }
+      def unsubscribe() : Unit = {
+        subscriptionRef.get.foreach { s =>
+          s.cancel()
+          INFO.log( s"${this} unsubscribed." )
+        }
+        subscriptionRef.set( None )
+      }
+
+      def onComplete() : Unit = {
+        INFO.log( s"${docHashStore} subscription has has signaled it has completed." )
+        subscriptionRef.set( None )
+      }
+      def onError( t : Throwable ) = {
+        WARNING.log( s"${docHashStore} (as publisher) failed, signaling an error.", t )
+        subscriptionRef.set( None )
+        subscribe() // see if we can resubscribe
+      }
+      def onNext(evt : AsyncDocHashStore.Event) = {
+        evt match {
+          case _ : Stored | _ : Amended => markDirtyDocRecordSeq( address )
+          case _ : Closed => {
+            subscriptionRef.get.foreach( _.cancel() )
+            drop( address )
+          }
+          case _ => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
+        }
+      }
+      def onSubscribe(s : Subscription) = {
+        s.request( Long.MaxValue ) // this is incautious, but it's unlikely we'll be overwhelmed
+        subscriptionRef.set( Some( s ) )
+        FINE.log( s"${this} has subscribed to ${s}." )
+      }
+      override def toString() = s"AddressSubscriber( 0x${address.hex} )"
     }
   }
 }

@@ -217,15 +217,15 @@ class AkkaHttpServer(
             path(Segment) { resourceName =>
               pathEnd {
                 complete {
-                  Future {
+                  Future.unit flatMap { _ =>
                     if ( resourceName.endsWith(".css") ) { // .css files only here
-                      Option( this.getClass().getResourceAsStream( s"/assets/css/${resourceName}") ) match {
-                        case Some( is ) => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( MediaTypes.`text/css` withCharset HttpCharsets.`UTF-8`, is.remainingToByteArray ) )
-                        case None => HttpResponse( status = StatusCodes.NotFound )
+                      caches.attemptResource( s"/assets/css/${resourceName}" ) match {
+                        case Some( f_byteseq ) => f_byteseq.map( byteseq => HttpResponse( status = StatusCodes.OK, entity = HttpEntity( MediaTypes.`text/css` withCharset HttpCharsets.`UTF-8`, byteseq.toArray ) ) )
+                        case None              => Future( HttpResponse( status = StatusCodes.NotFound ) )
                       }
                     }
                     else {
-                      HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, "Only .css files ae permitted from this directory." ) )
+                      Future( HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, "Only .css files ae permitted from this directory." ) ) )
                     }
                   }
                 }
@@ -261,35 +261,42 @@ class AkkaHttpServer(
                         pathPrefix("post") {
                           pathEnd {
                             post {
-                              complete { // XXX: place fully in futures domain!
-                                val query = ctx.request.uri.query()
-                                val visibility : Either[HttpResponse,String] = {
-                                  query.get( VisibilityKey ) match {
-                                    case Some( v @ "public" )  => Right(v)
-                                    case Some( v @ "private" ) => Right(v)
-                                    case Some( other )         => Left( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) )
-                                    case None if docStoreRecords(address).defaultToPublic => Right("public")
-                                    case None                                             => Right("private")
-                                  }
-                                }
-                                val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
-                                f_bytestring map { bytestring =>
-                                  val data = bytestring.compact.toArray.toImmutableSeq
-                                  val contentType = ctx.request.entity.contentType.toString
-                                  val metadata = new Properties()
-                                  metadata.setProperty( ContentTypeKey, contentType )
-                                  metadata.setProperty( VisibilityKey, visibility.toString )
-                                  val putResponse = docStore.put( data, metadata )
-                                  putResponse match {
-                                    case PutResponse.Success( hash, handle, metadata ) => {
-                                      caches.markDirtyGetResponse( address, hash )
-                                      caches.markDirtyDocRecordSeq( address )
-                                      caches.markDirtyHandleData( handle )
-                                      HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/octet-stream`, hash.toArray ) )
+                              complete {
+                                Future {
+                                  val query = ctx.request.uri.query()
+                                  val visibility : Either[HttpResponse,String] = {
+                                    query.get( VisibilityKey ) match {
+                                      case Some( v @ "public" )  => Right(v)
+                                      case Some( v @ "private" ) => Right(v)
+                                      case Some( other )         => Left( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) )
+                                      case None if docStoreRecords(address).defaultToPublic => Right("public")
+                                      case None                                             => Right("private")
                                     }
-                                    case PutResponse.Error( message, Some( t ) ) => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
-                                    case PutResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
-                                    case PutResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
+                                  }
+                                  visibility
+                                } flatMap {
+                                  case Left( response ) => Future.successful( response )
+                                  case Right( viz ) => {
+                                    val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
+                                    f_bytestring map { bytestring =>
+                                      val data = bytestring.compact.toArray.toImmutableSeq
+                                      val contentType = ctx.request.entity.contentType.toString
+                                      val metadata = new Properties()
+                                      metadata.setProperty( ContentTypeKey, contentType )
+                                      metadata.setProperty( VisibilityKey, viz )
+                                      val putResponse = docStore.put( data, metadata )
+                                      putResponse match {
+                                        case PutResponse.Success( hash, handle, metadata ) => {
+                                          caches.markDirtyGetResponse( address, hash )
+                                          caches.markDirtyDocRecordSeq( address )
+                                          caches.markDirtyHandleData( handle )
+                                          HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/octet-stream`, hash.toArray ) )
+                                        }
+                                        case PutResponse.Error( message, Some( t ) ) => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message + "\n\n" + t.fullStackTrace ) )
+                                        case PutResponse.Error( message, None )      => HttpResponse( status = StatusCodes.InternalServerError, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
+                                        case PutResponse.Forbidden( message )        => HttpResponse( status = StatusCodes.Forbidden, entity = HttpEntity( `text/plain(UTF-8)`, message ) )
+                                      }
+                                    }
                                   }
                                 }
                               }
