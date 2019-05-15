@@ -29,7 +29,8 @@ import com.typesafe.config.{Config => TSConfig, ConfigFactory => TSConfigFactory
 import io.circe._, io.circe.generic.auto._, io.circe.generic.semiauto._, io.circe.parser._, io.circe.syntax._
 
 import com.mchange.sc.v1.consuela._
-import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress, EthChainId}
+import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress, EthChainId, EthSignature}
+import com.mchange.sc.v1.consuela.io.setUserOnlyFilePermissions
 import stub.sol
 
 import com.mchange.sc.v1.ethdocstore._
@@ -47,10 +48,13 @@ import java.io.{BufferedInputStream, IOException, File}
 import java.time.{Instant, ZonedDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
+import java.nio.charset.StandardCharsets
 
 import com.mchange.sc.v1.log.MLevel._
 
 import DocStore.{PutResponse,GetResponse,PutCheck}
+
+import SynkreBCryptBasicAuthUtils._
 
 object AkkaHttpServer {
 
@@ -58,6 +62,8 @@ object AkkaHttpServer {
 
   private val ContentTypeKey = "Content-Type"
   private val VisibilityKey  = "Visibility"
+
+  private val EthAddressRegex = """(?:0x)?\p{XDigit}{40}""".r
 
   case class DocStoreRecord( localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook )
 
@@ -120,6 +126,7 @@ object AkkaHttpServer {
       if (! (file.canRead() && file.canWrite())) {
         throw new IOException( s"File '${file}' is not readable and writable, should be." )
       }
+      setUserOnlyFilePermissions( file )
       file
     }
 
@@ -169,6 +176,8 @@ class AkkaHttpServer(
 
   private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 15000, challengeLength = 32 )
 
+  private lazy val passwordManager = new PropsFilePasswordManager( authProperties )
+
   lazy val routes = mbNakedPath match {
     case Some( nakedPath ) => pathPrefix( nakedPath )( withinAppRoutes )
     case None              => withinAppRoutes
@@ -183,6 +192,15 @@ class AkkaHttpServer(
       def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toVector
 
       concat(
+        pathPrefix("test") {
+          synkreAuthenticateBasicAsync("test", (username, _) => Future.successful(Some(username))) { name =>
+            complete {
+              Future {
+                HttpResponse( entity = HttpEntity( `text/plain(UTF-8)`, name ) )
+              }
+            }
+          }
+        },
         pathPrefix("challenge") {
           complete {
             Future {
@@ -192,7 +210,45 @@ class AkkaHttpServer(
         },
         pathPrefix("register") {
           post {
-            ???
+            complete {
+              val f_bytestring : Future[ByteString] = ctx.request.entity.dataBytes.runWith( Sink.reduce( _ ++ _ ) )
+              f_bytestring map { bytestring =>
+                val strData = new String( bytestring.compact.toArray, StandardCharsets.UTF_8 )
+                decode[Registration](strData) match {
+                  case Left( error ) => HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  error.fullStackTrace ) )
+                  case Right( registration ) => {
+                    val challenge = registration.challengeHex.decodeHexAsSeq
+                    if ( challengeManager.verifyChallenge( challenge ) ) {
+
+                      val failableResponse = {
+                        for {
+                          expectedAddress <- Failable( EthAddress( registration.expectedAddressHex ) )
+                          signature       <- Failable( EthSignature.fromBytesRSV( registration.signatureHexRSV.decodeHex ) )
+                        }
+                        yield {
+                          if ( signature.signsForAddress( challenge.toArray, expectedAddress ) ) {
+                            passwordManager.set( registration.username, registration.password, expectedAddress )
+                            HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `text/plain(UTF-8)`, s"User '${registration.username}' successfully registered." ) )
+                          }
+                          else {
+                            HttpResponse( status = StatusCodes.Unauthorized, entity = HttpEntity( `text/plain(UTF-8)`, s"Requested identity did not match signature of challenge." ) )
+                          }
+                        }
+                      }
+
+                      val recoveredResponse = failableResponse recover { f =>
+                        HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, "Bad Request:\n" + f ) )
+                      }
+
+                      recoveredResponse.assert
+                    }
+                    else {
+                      HttpResponse( status = StatusCodes.Unauthorized, entity = HttpEntity( `text/plain(UTF-8)`, s"Registration failed. Challenge '${registration.challengeHex}' unknown." ) )
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         pathPrefix("index.html") {
@@ -233,7 +289,7 @@ class AkkaHttpServer(
             }
           }
         },
-        pathPrefix(Segment) { addressHex =>
+        pathPrefix(EthAddressRegex) { addressHex =>
           Failable( EthAddress(addressHex.decodeHex) ) match {
             case f : Failed[EthAddress] => {
               complete {
