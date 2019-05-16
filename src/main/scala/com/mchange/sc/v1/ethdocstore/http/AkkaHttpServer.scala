@@ -171,7 +171,7 @@ class AkkaHttpServer(
 
   private lazy val caches = new CachedDocStores( docStores, nodeInfo, cacheableDataMaxBytes )
 
-  private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 15000, challengeLength = 32 )
+  private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 60000, challengeLength = 32 )
 
   private lazy val passwordManager = new PropsFilePasswordManager( authProperties )
 
