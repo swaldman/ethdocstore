@@ -63,6 +63,10 @@ contract DocHashStore {
     emit Deauthorized( msg.sender );
   }
 
+  function isAuthorized( address user ) public view returns (bool) {
+    return authorized[user];
+  }
+
   function store( bytes32 docHash, string memory name, string memory description ) public adminOrAuthorized {
     require( !closed, "This DocHashStore has been closed." );
     require( records[ docHash ].timestamp == 0, "DocHash has already been stored." );

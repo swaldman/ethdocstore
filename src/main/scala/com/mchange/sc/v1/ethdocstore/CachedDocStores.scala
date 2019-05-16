@@ -41,7 +41,7 @@ object CachedDocStores {
             fut.value match {
               case Some( _ : Failure[V0] )  => true // already failed
               case Some( Success( value ) ) => uncacheableValue( value )
-              case None                     => false
+              case None                     => false // still resolving
             }
           }
           case None => true // not found
@@ -98,6 +98,10 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
   def attemptDocRecordSeq( docStoreAddress : EthAddress ) : Option[Future[immutable.Seq[DocRecord]]] = DocRecordSeqCache.find( docStoreAddress )
 
   def markDirtyDocRecordSeq( docStoreAddress : EthAddress ) : Unit = DocRecordSeqCache.markDirty( docStoreAddress )
+
+  def attemptUserIsAuthorized( docStoreAddress : EthAddress, userAddress : EthAddress ) : Option[Future[Boolean]] = UserIsAuthorizedCache.find( Tuple2( docStoreAddress, userAddress ) )
+
+  def markDirtyUserIsAuthorized( docStoreAddress : EthAddress, userAddress : EthAddress ) : Unit = UserIsAuthorizedCache.markDirty( Tuple2( docStoreAddress, userAddress ) )
 
   def attemptHandleData( handle : DocStore.Handle ) : Option[Future[immutable.Seq[Byte]]] = HandleDataCache.find( handle )
 
@@ -159,6 +163,16 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
             }
           }
         }
+      }
+    }
+  }
+
+  private final object UserIsAuthorizedCache extends MiniCache[(EthAddress,EthAddress),Option[Future[Boolean]]] {
+    protected val manager = new MiniCache.OptFutManager[Tuple2[EthAddress,EthAddress],Boolean] {
+      def _recreateFromKey( docHashStoreUserPair : Tuple2[EthAddress,EthAddress] ) : Option[Future[Boolean]] = {
+        val ( docHashStoreAddress, userAddress ) = docHashStoreUserPair
+        implicit val sender = stub.Sender.Default
+        Some( docHashStores( docHashStoreAddress ).constant.isAuthorized( userAddress ) )
       }
     }
   }
@@ -246,6 +260,8 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
             subscriptionRef.get.foreach( _.cancel() )
             drop( address )
           }
+          case evt @ Authorized( userAddress, _, _ )   =>  markDirtyUserIsAuthorized( evt.sourceAddress, userAddress )
+          case evt @ Deauthorized( userAddress, _, _ ) =>  markDirtyUserIsAuthorized( evt.sourceAddress, userAddress )
           case _ => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
         }
       }

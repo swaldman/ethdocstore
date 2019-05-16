@@ -15,6 +15,8 @@ import java.net.{HttpURLConnection, URL}
 import com.mchange.sc.v1.sbtethereum.SbtEthereumPlugin
 import com.mchange.sc.v1.sbtethereum.SbtEthereumPlugin.autoImport._
 
+import com.mchange.sc.v3.failable._
+
 import com.mchange.sc.v2.io._
 import com.mchange.sc.v2.lang._
 
@@ -87,15 +89,31 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
         os.write( fileBytes )
       }
       val responseCode = conn.getResponseCode()
+
       responseCode match {
         case 200   => {
           log.info( s"File '${file}' successfully uploaded." )
           val hashBytes = borrow( conn.getInputStream() )( _.remainingToByteSeq )
           sol.Bytes32( hashBytes )
         }
-        case other => throw new Exception( s"Failed to post file. HTTP Status Code: ${other}" )
+        case other => {
+          handleUnexpectedStatusCode(other, "Failed to post file.", conn)
+        }
       }
     }
+  }
+
+  private def handleUnexpectedStatusCode( statusCode : Int, desc : String, conn : HttpURLConnection ) : Nothing = {
+    val bodyBytes = {
+      val recoveredFailable = {
+        Failable( borrow( conn.getErrorStream() )( _.remainingToByteArray ) ) orElse Failable( borrow( conn.getInputStream() )( _.remainingToByteArray ) ) recover { f =>
+          println(f)
+          "Not Available".getBytes("UTF8")
+        }
+      }
+      recoveredFailable.get
+    }
+    throw new Exception( s"""${desc} HTTP Status Code: ${statusCode}\n\n${new String(bodyBytes, "UTF8")}""" )
   }
 
   // plug-in setup

@@ -60,9 +60,6 @@ object AkkaHttpServer {
 
   lazy implicit val logger = mlogger( this )
 
-  private val ContentTypeKey = "Content-Type"
-  private val VisibilityKey  = "Visibility"
-
   private val EthAddressRegex = """(?:0x)?\p{XDigit}{40}""".r
 
   case class DocStoreRecord( localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook )
@@ -215,7 +212,7 @@ class AkkaHttpServer(
               f_bytestring map { bytestring =>
                 val strData = new String( bytestring.compact.toArray, StandardCharsets.UTF_8 )
                 decode[Registration](strData) match {
-                  case Left( error ) => HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  error.fullStackTrace ) )
+                  case Left( error ) => WARNING.logEval( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  error.fullStackTrace ) ) )
                   case Right( registration ) => {
                     val challenge = registration.challengeHex.decodeHexAsSeq
                     if ( challengeManager.verifyChallenge( challenge ) ) {
@@ -237,7 +234,7 @@ class AkkaHttpServer(
                       }
 
                       val recoveredResponse = failableResponse recover { f =>
-                        HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, "Bad Request:\n" + f ) )
+                        WARNING.logEval( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, "Bad Request:\n" + f ) ) )
                       }
 
                       recoveredResponse.assert
@@ -298,7 +295,7 @@ class AkkaHttpServer(
                       |
                       |${f.toThrowable.fullStackTrace}""".stripMargin
                 }
-                Future( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  report) ) )
+                Future( WARNING.logEval( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  report) ) ) )
               }
             }
             case s : Succeeded[EthAddress] => {
@@ -306,7 +303,7 @@ class AkkaHttpServer(
               docStores.get( address ) match {
                 case None => {
                   complete {
-                    Future( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  s"Not configured for contract at address '0x${address.hex}'.") ) )
+                    Future( WARNING.logEval( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`,  s"Not configured for contract at address '0x${address.hex}'.") ) ) )
                   }
                 }
                 case Some( docStore ) => {
@@ -321,10 +318,10 @@ class AkkaHttpServer(
                                 Future {
                                   val query = ctx.request.uri.query()
                                   val visibility : Either[HttpResponse,String] = {
-                                    query.get( VisibilityKey ) match {
+                                    query.get( Metadata.Key.Visibility ) match {
                                       case Some( v @ "public" )  => Right(v)
                                       case Some( v @ "private" ) => Right(v)
-                                      case Some( other )         => Left( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) )
+                                      case Some( other )         => Left( WARNING.logEval( HttpResponse( status = StatusCodes.BadRequest, entity = HttpEntity( `text/plain(UTF-8)`, s"Unexpected visibility query string param value: ${other}" ) ) ) )
                                       case None if docStoreRecords(address).defaultToPublic => Right("public")
                                       case None                                             => Right("private")
                                     }
@@ -338,8 +335,8 @@ class AkkaHttpServer(
                                       val data = bytestring.compact.toArray.toImmutableSeq
                                       val contentType = ctx.request.entity.contentType.toString
                                       val metadata = new Properties()
-                                      metadata.setProperty( ContentTypeKey, contentType )
-                                      metadata.setProperty( VisibilityKey, viz )
+                                      metadata.setProperty( Metadata.Key.ContentType, contentType )
+                                      metadata.setProperty( Metadata.Key.Visibility, viz )
                                       val putResponse = docStore.put( data, metadata )
                                       putResponse match {
                                         case PutResponse.Success( hash, handle, metadata ) => {
@@ -360,13 +357,51 @@ class AkkaHttpServer(
                           }
                         },
                         pathPrefix("get") {
-                          path(Segment) { hex =>
+                          path(Segment) { hashHex =>
                             pathEnd {
-                              complete {
-                                caches.attemptGetResponse( address, hex.decodeHexAsSeq ) match {
-                                  case None => Future( HttpResponse( status = StatusCodes.NotFound ) )
-                                  case Some( f_getResponse ) => handleGetResponse( f_getResponse )
+                              def authenticatedCompletion = {
+                                synkreAuthenticateBasicAsync(s"Etherea", (username, password) => Future( passwordManager.authenticate( username, password ) ) ) { userAddress =>
+                                  complete {
+                                    Future.unit flatMap { _ =>
+                                      caches.attemptUserIsAuthorized( address, userAddress ) match {
+                                        case Some( f_userIsAuthorized ) => {
+                                          f_userIsAuthorized flatMap { userIsAuthorized =>
+                                            if ( userIsAuthorized ) {
+                                              handleDataStoreGet( address, hashHex )
+                                            }
+                                            else {
+                                              Future {
+                                                HttpResponse(
+                                                  status = StatusCodes.Unauthorized,
+                                                  entity = HttpEntity( `text/plain(UTF-8)`, s"User with address 0x${userAddress.hex} is not authorized on doc hash store @ ${address.hex}" )
+                                                )
+                                              }
+                                            }
+                                          }
+                                        }
+                                        case None => Future {
+                                          HttpResponse(
+                                            status = StatusCodes.InternalServerError,
+                                            entity = HttpEntity( `text/plain(UTF-8)`, s"Failed to read whether 0x${userAddress.hex} is authorized on doc hash store @ ${address.hex}" )
+                                          )
+                                        }
+                                      }
+                                    }
+                                  }
                                 }
+                              }
+                              caches.attemptSynchronousMetadata( address, hashHex.decodeHexAsSeq ) match {
+                                case Some( props ) => {
+                                  if ( props.getProperty( Metadata.Key.Visibility ) == "public" ) {
+                                    complete {
+                                      handleDataStoreGet( address, hashHex )
+                                    }
+                                  }
+                                  else {
+                                    authenticatedCompletion
+                                  }
+                                }
+                                case None => authenticatedCompletion
                               }
                             }
                           }
@@ -393,10 +428,17 @@ class AkkaHttpServer(
     }
   }
 
-  private def handleGetResponse( f_getResponse : Future[DocStore.GetResponse] ) : Future[HttpResponse] = {
+  private def handleDataStoreGet( address : EthAddress, hashHex : String ) : Future[HttpResponse] = {
+    Future( caches.attemptGetResponse( address, hashHex.decodeHexAsSeq ) ) flatMap {
+      case None => Future( HttpResponse( status = StatusCodes.NotFound ) )
+      case Some( f_getResponse ) => deliverGetResponse( f_getResponse )
+    }
+  }
+
+  private def deliverGetResponse( f_getResponse : Future[DocStore.GetResponse] ) : Future[HttpResponse] = {
     f_getResponse flatMap {
       case GetResponse.Success( handle, metadata ) => {
-        val metadataContentType = metadata.getProperty( ContentTypeKey )
+        val metadataContentType = metadata.getProperty( Metadata.Key.ContentType )
         val contentType = {
           if ( metadataContentType == null ) `application/octet-stream` else ContentType.parse( metadataContentType ).right.get
         }

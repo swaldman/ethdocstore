@@ -15,6 +15,8 @@ import scala.concurrent.{blocking, ExecutionContext, Future}
 import scala.util.Failure
 import scala.util.control.NonFatal
 
+import akka.http.scaladsl.model.{ContentType,MediaType}
+
 import DocStore.{PutResponse,GetResponse,PutApprover}
 
 object DirectoryDocStore {
@@ -46,6 +48,59 @@ object DirectoryDocStore {
     }
   }
 
+  def suffixForContentType( contentType : String ) : Option[String] = {
+    def fromExtensions( extensions : List[String] ) = {
+      if ( extensions.length > 0 ) Some( extensions.head ) else None
+    }
+    ContentType.parse( contentType ) match {
+      case Left( oopsies ) => {
+        FINE.log( s"Could not parse '${contentType}' as a content type." )
+        oopsies.foreach( oopsie => FINE.log( oopsie.toString ) )
+        MediaType.parse( contentType ) match {
+          case Left( whoopsies ) => {
+            FINE.log( s"Also could not parse '${contentType}' as a media type." )
+            whoopsies.foreach( whoopsie => FINE.log( whoopsie.toString ) )
+            None
+          }
+          case Right( mediaType ) => {
+            fromExtensions( mediaType.fileExtensions )
+          }
+        }
+      }
+      case Right( ct ) => {
+        fromExtensions( ct.mediaType.fileExtensions )
+      }
+    }
+  }
+
+  def newDataFile( parentDir : File, hashHex : String, contentType : String ) : File = {
+    val mbSuffix = suffixForContentType( contentType )
+    mbSuffix match {
+      case Some( "properties" ) => new File( parentDir, hashHex ) // nothing sneaky please
+      case Some( suffix )       => new File( parentDir, s"${hashHex}.${suffix}" )
+      case None                 => new File( parentDir, hashHex )
+    }
+  }
+
+  def permissiveFindExistingDataFile( parentDir : File, hashHex : String, expectedContentType : Option[String] ) : Option[File] = {
+    val mbFirst = expectedContentType.map( contentType => newDataFile( parentDir, hashHex, contentType ) )
+    if ( mbFirst.nonEmpty && mbFirst.get.exists() ) {
+      mbFirst
+    }
+    else {
+      val second = new File( parentDir, hashHex )
+      if ( second.exists() ) {
+        Some( second )
+      }
+      else {
+        val candidates = parentDir.list()
+        val prefix = hashHex + '.'
+        val metadataName = hashHex + ".properties"
+        candidates.find( name => name.startsWith(hashHex) && name != metadataName ).map( name => new File( parentDir, name ) )
+      }
+    }
+  }
+
   final object PostPutHook {
     private val OK : Future[Unit] = Future.unit
 
@@ -60,6 +115,7 @@ object DirectoryDocStore {
 
     val NoOp : PostPutHook = ( pr : PutRecord, ec : ExecutionContext ) => OK
 
+    // should we think about locking access to the directory somehow until this completes?
     val GitAddCommitPush = ( pr : PutRecord, ec : ExecutionContext ) => Future {
       val dotgit = new File( pr.dir, ".git" )
       if (dotgit.exists() && dotgit.isDirectory()) {
@@ -68,25 +124,21 @@ object DirectoryDocStore {
         val processLogger = ProcessLogger( line => DEBUG.log( "GitAddCommitPush - stdout: ${line}" ), line => DEBUG.log( "GitAddCommitPush - stderr: ${line}" ) )
 
         blocking {
-          pr.dir.getCanonicalPath.intern.synchronized { // lock on an interned string representing the storage directory
-
-            val aev = Process("git" :: "add" :: "." :: Nil, Some(pr.dir)).!( processLogger )
-            if (aev != 0) {
-              WARNING.log( s"GitAddCommitPush: Add failed with exit value ${aev}. See DEBUG logs for output." )
+          val aev = Process("git" :: "add" :: "." :: Nil, Some(pr.dir)).!( processLogger )
+          if (aev != 0) {
+            WARNING.log( s"GitAddCommitPush: Add failed with exit value ${aev}. See DEBUG logs for output." )
+          }
+          else {
+            val cev = Process("git" :: "commit" :: "-m" :: s""""Add files for 0x${pr.hash.hex}."""" :: Nil, Some(pr.dir)).!( processLogger )
+            if (cev != 0) {
+              WARNING.log( s"GitAddCommitPush: Commit failed with exit value ${cev}. See DEBUG logs for output." )
             }
             else {
-              val cev = Process("git" :: "commit" :: "-m" :: s""""Add files for 0x${pr.hash.hex}."""" :: Nil, Some(pr.dir)).!( processLogger )
-              if (cev != 0) {
-                WARNING.log( s"GitAddCommitPush: Commit failed with exit value ${cev}. See DEBUG logs for output." )
-              }
-              else {
-                val pev = Process("git" :: "push" :: Nil, Some(pr.dir)).!( processLogger )
-                if (pev != 0) {
-                  WARNING.log( s"GitAddCommitPush: Push failed with exit value ${pev}. See DEBUG logs for output." )
-                }
+              val pev = Process("git" :: "push" :: Nil, Some(pr.dir)).!( processLogger )
+              if (pev != 0) {
+                WARNING.log( s"GitAddCommitPush: Push failed with exit value ${pev}. See DEBUG logs for output." )
               }
             }
-
           }
         }
       }
@@ -113,10 +165,8 @@ final class DirectoryDocStore private (
   protected def store( hash : immutable.Seq[Byte], data : immutable.Seq[Byte], metadata : Properties ) : DocStore.PutResponse = {
     try {
       val hashHex = hash.hex
-      val dataFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
-      dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
-        dataFile.replaceContents( data )
+      metadataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
 
         val mergedMetadata = {
           if ( metadataFile.exists() ) {
@@ -127,12 +177,21 @@ final class DirectoryDocStore private (
               }
             }.xwarn("Error loading original metadata. It will be ignored and overwritten!")
             working.putAll( metadata )
-            metadata
+            working
           }
           else {
             metadata
           }
         }
+
+        // this may get slow... we've really complicated things to support suffixes (which renders the mapping between hashes and filenames fuzzy)
+        permissiveFindExistingDataFile( dir, hashHex, Option( mergedMetadata.getProperty( Metadata.Key.ContentType ) ) ).foreach { file =>
+          WARNING.log( s"Data for hash 0x${hash.hex} re-put. Deleting old data file '${file.getAbsolutePath}'." )
+          file.delete()
+        }
+
+        val dataFile = newDataFile( dir, hashHex, metadata.getProperty( Metadata.Key.ContentType ) )
+        dataFile.replaceContents( data )
 
         borrow( new BufferedOutputStream( new FileOutputStream( metadataFile ) ) ) { os =>
           mergedMetadata.store( os, s"Metadata for 0x${hashHex}" )
@@ -154,11 +213,9 @@ final class DirectoryDocStore private (
   def get( hash : immutable.Seq[Byte] ) : DocStore.GetResponse = {
     try {
       val hashHex = hash.hex
-      val dataFile = new File( dir, hashHex )
       val metadataFile = new File( dir, hashHex + ".properties" )
 
-      dataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
-        val handle = DocStore.Handle.FastFailFile( dataFile )
+      metadataFile.getCanonicalPath().intern().synchronized { // lock on an interned string representing the hash in this storage directory
         val metadata = {
           val raw = new Properties
           borrow( new BufferedInputStream( new FileInputStream( metadataFile ) ) ) { is =>
@@ -166,7 +223,14 @@ final class DirectoryDocStore private (
           }
           raw
         }
-        GetResponse.Success( handle, metadata )
+        val mbDataFile = permissiveFindExistingDataFile( dir, hashHex, Option( metadata.getProperty( Metadata.Key.ContentType ) ) )
+        mbDataFile match {
+          case Some( dataFile ) => {
+            val handle = DocStore.Handle.FastFailFile( dataFile )
+            GetResponse.Success( handle, metadata )
+          }
+          case None => GetResponse.NotFound
+        }
       }
     }
     catch {

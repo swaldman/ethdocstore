@@ -1,6 +1,6 @@
 ethdocstore {
   contracts {
-    0x61fa251b89bfb357ed66794486adb478370218c3 {
+    0xf0dc5aabc7fa653ef9be96343f82e9c5736c87d1 {
       defaultToPublic = false
       postPutHook     = "GitAddCommitPush"
     }
@@ -13,7 +13,7 @@ ethdocstore {
     server {
       path    = "/poop/"
       port    = 7234
-      dataDir = "/Users/swaldman/tmp/test-ethdocstore1"
+      dataDir = "/Users/swaldman/tmp/test-ethdocstore3"
     }
   }
 }

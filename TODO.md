@@ -11,3 +11,7 @@
 * Think a lot more about consistency in load-balanced / multi-server use case
   - Instead of treating file puts as repeatable and idempotent, maybe guarantee at-most-once semantics with some form of atomic entry and commit
 * Authentication is HTTP Basic, but intended users are host-your-own small orgs, is expecting https too much?
+* Migrate to elsewhere
+  - file relativizer
+  - password manager
+  
