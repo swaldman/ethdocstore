@@ -99,9 +99,9 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
 
   def markDirtyDocRecordSeq( docStoreAddress : EthAddress ) : Unit = DocRecordSeqCache.markDirty( docStoreAddress )
 
-  def attemptUserIsAuthorized( docStoreAddress : EthAddress, userAddress : EthAddress ) : Option[Future[Boolean]] = UserIsAuthorizedCache.find( Tuple2( docStoreAddress, userAddress ) )
+  def attemptUserCanUpdate( docStoreAddress : EthAddress, userAddress : EthAddress ) : Option[Future[Boolean]] = UserCanUpdateCache.find( Tuple2( docStoreAddress, userAddress ) )
 
-  def markDirtyUserIsAuthorized( docStoreAddress : EthAddress, userAddress : EthAddress ) : Unit = UserIsAuthorizedCache.markDirty( Tuple2( docStoreAddress, userAddress ) )
+  def markDirtyUserCanUpdate( docStoreAddress : EthAddress, userAddress : EthAddress ) : Unit = UserCanUpdateCache.markDirty( Tuple2( docStoreAddress, userAddress ) )
 
   def attemptHandleData( handle : DocStore.Handle ) : Option[Future[immutable.Seq[Byte]]] = HandleDataCache.find( handle )
 
@@ -167,12 +167,12 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
     }
   }
 
-  private final object UserIsAuthorizedCache extends MiniCache[(EthAddress,EthAddress),Option[Future[Boolean]]] {
+  private final object UserCanUpdateCache extends MiniCache[(EthAddress,EthAddress),Option[Future[Boolean]]] {
     protected val manager = new MiniCache.OptFutManager[Tuple2[EthAddress,EthAddress],Boolean] {
       def _recreateFromKey( docHashStoreUserPair : Tuple2[EthAddress,EthAddress] ) : Option[Future[Boolean]] = {
         val ( docHashStoreAddress, userAddress ) = docHashStoreUserPair
         implicit val sender = stub.Sender.Default
-        Some( docHashStores( docHashStoreAddress ).constant.isAuthorized( userAddress ) )
+        Some( docHashStores( docHashStoreAddress ).constant.canUpdate( userAddress ) )
       }
     }
   }
@@ -260,8 +260,8 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
             subscriptionRef.get.foreach( _.cancel() )
             drop( address )
           }
-          case evt @ Authorized( userAddress, _, _ )   =>  markDirtyUserIsAuthorized( evt.sourceAddress, userAddress )
-          case evt @ Deauthorized( userAddress, _, _ ) =>  markDirtyUserIsAuthorized( evt.sourceAddress, userAddress )
+          case evt @ Authorized( userAddress, _, _ )   =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
+          case evt @ Deauthorized( userAddress, _, _ ) =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
           case _ => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
         }
       }

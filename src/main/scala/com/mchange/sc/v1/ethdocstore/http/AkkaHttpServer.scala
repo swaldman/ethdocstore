@@ -363,7 +363,7 @@ class AkkaHttpServer(
                                 synkreAuthenticateBasicAsync(s"Etherea", (username, password) => Future( passwordManager.authenticate( username, password ) ) ) { userAddress =>
                                   complete {
                                     Future.unit flatMap { _ =>
-                                      caches.attemptUserIsAuthorized( address, userAddress ) match {
+                                      caches.attemptUserCanUpdate( address, userAddress ) match {
                                         case Some( f_userIsAuthorized ) => {
                                           f_userIsAuthorized flatMap { userIsAuthorized =>
                                             if ( userIsAuthorized ) {

@@ -63,8 +63,8 @@ contract DocHashStore {
     emit Deauthorized( msg.sender );
   }
 
-  function isAuthorized( address user ) public view returns (bool) {
-    return authorized[user];
+  function canUpdate( address user ) public view returns (bool) {
+    return user == admin || authorized[user];
   }
 
   function store( bytes32 docHash, string memory name, string memory description ) public adminOrAuthorized {
