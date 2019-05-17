@@ -3,6 +3,9 @@ package com.mchange.sc.v1.ethdocstore.plugin
 import com.mchange.sc.v1.ethdocstore.{Metadata,Registration}
 import com.mchange.sc.v1.ethdocstore.contract.DocHashStore
 
+import com.mchange.sc.v1.sbtethereum.api.Interaction._
+
+
 import sbt._
 import sbt.Keys._
 import sbt.plugins.JvmPlugin
@@ -37,21 +40,23 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     val webServiceUrl       = settingKey[String]("URL of the ethdocstore web service.")
     val docHashStoreAddress = settingKey[String]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
 
-    val ingestFilePdf = inputKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage, marks as a PDF file.")
-    val registerUser  = taskKey[Unit] ("Registers a user, associating the username with the current sender Ethereum address.")
+    val ingestFilePdf = taskKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage, marks as a PDF file.")
+    val registerUser  = taskKey[Unit]("Registers a user, associating the username with the current sender Ethereum address.")
   }
 
   import autoImport._
 
   lazy val defaults : Seq[sbt.Def.Setting[_]] = Seq(
-    Compile / ingestFilePdf := { ingestFileTask( "application/pdf" )( Compile ).evaluated },
+    Compile / ingestFilePdf := { ingestFileTask( "application/pdf" )( Compile ).value },
     Compile / registerUser  := { registerUserTask( Compile ).value }
   )
 
-  private def ingestFileTask( contentType : String )( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
+  private def ingestFileTask( contentType : String )( config : Configuration ) : Initialize[Task[EthHash]] = Def.task {
+    val is = interactionService.value
     val log = streams.value.log
     val wsUrl = webServiceUrl.value
 
+    /*
     val ( name, description, filePath, mbPublic ) = {
       for {
         n <- Space ~> token(NotSpace, "<name>")
@@ -62,12 +67,22 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
         ( n, d, fp, mp )
       }
     }.parsed
+     */
 
-    val file = new File( filePath ).getAbsoluteFile()
+    val file = queryMandatoryGoodFile( is, "Full path to file: ", file => (file.exists() && file.isFile() && file.canRead()), file => s"${file} does not exist, is not readable, or is not a regular file." ).getAbsoluteFile()
+
+    val name = {
+      val raw = assertReadLine( is, s"Name (or [Enter] for '${file.getName}'): ", mask = false ).trim()
+      if ( raw.isEmpty ) file.getName() else raw
+    }
+
+    val description = assertReadLine( is, "Description: ", mask = false )
+
+    val public = queryYN( is, "Should this file be public? " )
 
     val contractAddress = docHashStoreAddress.value
 
-    val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file, mbPublic.nonEmpty )
+    val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file, public )
 
     implicit val ( sctx, ssender ) = ( config / xethStubEnvironment ).value
 
