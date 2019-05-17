@@ -171,7 +171,7 @@ class AkkaHttpServer(
 
   private lazy val caches = new CachedDocStores( docStores, nodeInfo, cacheableDataMaxBytes )
 
-  private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 60000, challengeLength = 32 )
+  private lazy val challengeManager = new ChallengeManager( () => new java.security.SecureRandom(), validityMillis = 60000, postPrefixChallengeLength = 32 )
 
   private lazy val passwordManager = new PropsFilePasswordManager( authProperties )
 
@@ -456,54 +456,79 @@ class AkkaHttpServer(
     }
   }
 
+  private def findMetadatas( docStoreAddress : EthAddress, seq : Seq[DocRecord] ) : Future[Map[sol.Bytes32, Properties]] = {
+    val f_keyGetResponseSeq = {
+      Future.sequence {
+        val keyOptSeq : Seq[Tuple2[sol.Bytes32,Option[Future[GetResponse]]]] = seq.map { docRec => Tuple2( docRec.docHash, caches.attemptGetResponse( docStoreAddress, docRec.docHash.widen ) ) }
+        val keyFutSeq : Seq[Tuple2[sol.Bytes32,Future[GetResponse]]]         = keyOptSeq.filter { case (k, v) => v.nonEmpty }.map { case (k, v) => ( k, v.get) }
+        val futTupSeq : Seq[Future[Tuple2[sol.Bytes32,GetResponse]]]         = keyFutSeq.map { case (k, v) => v.map( gr => Tuple2( k, gr ) ) }
+        futTupSeq
+      }
+    }
+    f_keyGetResponseSeq.map( tupSeq => immutable.Map.empty[sol.Bytes32,Properties] ++ tupSeq.collect { case (k, v : GetResponse.Success) => (k, v.metadata ) } )
+  }
+
   private def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
-    fseq map { seq =>
-      import scalatags.Text.all._
-      import scalatags.Text.tags2.title
-      val titleStr = s"Hashed Documents (${seq.length} found at 0x${docStoreAddress.hex})"
-      val text = {
-        html(
-          head(
-            title( titleStr ),
-            link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
-          ),
-          body(
-            h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
-            ol(
-              cls:="allDocHashes",
-              for {
-                DocRecord( docHash, name, description, timestamp ) <- seq
-              } yield {
-                li (
-                  div(
-                    cls:="docHashItems",
+    import scalatags.Text.all._
+    import scalatags.Text.tags2.title
+    fseq flatMap { seq =>
+      findMetadatas( docStoreAddress, seq ) map { metadatas =>
+        def maybeLock( docHash : sol.Bytes32 ) = {
+          val mbVisibility = Option( metadatas( docHash ).getProperty(Metadata.Key.Visibility) )
+          mbVisibility match {
+            case Some( "public" ) => raw("")
+            case _                => raw(" &#128272;")
+          }
+        }
+        val titleStr = s"Hashed Documents (${seq.length} found at 0x${docStoreAddress.hex})"
+        val text = {
+          html(
+            head(
+              title( titleStr ),
+              link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+            ),
+            body(
+              h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
+              ol(
+                cls:="allDocHashes",
+                for {
+                  DocRecord( docHash, name, description, timestamp ) <- seq
+                } yield {
+                  li (
                     div(
-                      cls:="docHashName",
-                      a (
-                        href:=s"${prefix}0x${docStoreAddress.hex}/doc-store/get/${docHash.widen.hex}",
-                        name
+                      cls:="docHashItems",
+                      div(
+                        cls:="docHashName",
+                        a (
+                          href:=s"${prefix}0x${docStoreAddress.hex}/doc-store/get/${docHash.widen.hex}",
+                          name
+                        ),
+                        span (
+                          cls := "smaller",
+                          maybeLock( docHash )
+                        )
+                      ),
+                      div(
+                        cls:="docHash",
+                        "0x"+docHash.widen.hex
+                      ),
+                      div(
+                        cls:="docHashTimestamp",
+                        DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
+                      ),
+                      div(
+                        cls:="docHashDescription",
+                        description
                       )
-                    ),
-                    div(
-                      cls:="docHash",
-                      "0x"+docHash.widen.hex
-                    ),
-                    div(
-                      cls:="docHashTimestamp",
-                      DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
-                    ),
-                    div(
-                      cls:="docHashDescription",
-                      description
                     )
                   )
-                )
-              }
+                }
+              )
             )
           )
-        )
-      }.toString
-      HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
+        }.toString
+        HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
+      }
     }
   }
 

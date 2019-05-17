@@ -3,7 +3,10 @@ package com.mchange.sc.v1.ethdocstore.http
 import scala.collection._
 import com.mchange.sc.v2.collection.immutable._
 
-class ChallengeManager( randomFactory : () => java.security.SecureRandom, validityMillis : Int, challengeLength : Int = 32 ) {
+object ChallengeManager {
+  private val PrefixBytes = "Signature Challenge - Random Bytes: ".getBytes( "US-ASCII" )
+}
+class ChallengeManager( randomFactory : () => java.security.SecureRandom, validityMillis : Int, postPrefixChallengeLength : Int = 32 ) {
 
   val random = randomFactory()
 
@@ -11,9 +14,9 @@ class ChallengeManager( randomFactory : () => java.security.SecureRandom, validi
 
   def newChallenge() : immutable.Seq[Byte] = this.synchronized {
     clean()
-    val arr = Array.ofDim[Byte]( challengeLength )
+    val arr = Array.ofDim[Byte]( postPrefixChallengeLength )
     random.nextBytes( arr )
-    val out = ImmutableArraySeq.Byte( arr )
+    val out = ImmutableArraySeq.Byte( ChallengeManager.PrefixBytes ++ arr )
     challengeToTimestamp = challengeToTimestamp + Tuple2( out, System.currentTimeMillis() )
     out
   }

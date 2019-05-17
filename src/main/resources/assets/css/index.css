@@ -10,7 +10,7 @@ h1 {
 .docHashItems {
     display: grid;
     grid-template-columns: 25% 25% auto;
-    grid-template-rows: 1.5em auto;
+    grid-template-rows: 1.75em auto;
     background-color: white;
     border: 2px solid black;
     margin-bottom: 3px;
@@ -49,4 +49,7 @@ h1 {
     grid-row:    2;
     padding: 3px;
     margin-left: 1em;
+}
+.smaller {
+    font-size: smaller;
 }

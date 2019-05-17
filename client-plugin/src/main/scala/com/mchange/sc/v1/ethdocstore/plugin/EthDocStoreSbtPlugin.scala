@@ -1,6 +1,6 @@
 package com.mchange.sc.v1.ethdocstore.plugin
 
-import com.mchange.sc.v1.ethdocstore.Registration
+import com.mchange.sc.v1.ethdocstore.{Metadata,Registration}
 import com.mchange.sc.v1.ethdocstore.contract.DocHashStore
 
 import sbt._
@@ -52,13 +52,14 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     val log = streams.value.log
     val wsUrl = webServiceUrl.value
 
-    val ( name, description, filePath ) = {
+    val ( name, description, filePath, mbPublic ) = {
       for {
-        name <- Space ~> token(NotSpace, "<name>")
-        desc <- Space ~> token(StringEscapable, "<quoted-description>")
-        filePath <- Space ~> token((any.+).map( _.mkString.trim ),"<file-path>")
+        n <- Space ~> token(NotSpace, "<name>")
+        d <- Space ~> token(StringEscapable, "<quoted-description>")
+        fp <- Space ~> token(StringEscapable,"<file-path>")
+        mp <- Space ~> token(literal("public").?, "[public]")
       } yield {
-        ( name, desc, filePath )
+        ( n, d, fp, mp )
       }
     }.parsed
 
@@ -66,7 +67,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
 
     val contractAddress = docHashStoreAddress.value
 
-    val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file )
+    val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file, mbPublic.nonEmpty )
 
     implicit val ( sctx, ssender ) = ( config / xethStubEnvironment ).value
 
@@ -185,13 +186,23 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     }
   }
 
-  private def doStoreFile( log : sbt.Logger, wsUrl : String, contractAddress : String, contentType : String, file : File ) : sol.Bytes32 = {
+  private def doStoreFile( log : sbt.Logger, wsUrl : String, contractAddress : String, contentType : String, file : File, pub : Boolean ) : sol.Bytes32 = {
     log.info( s"Checking file: '${file}'" )
     if (! file.exists()) throw new Exception( s"File '${file}' does not exist." )
     if (! file.canRead()) throw new Exception( s"File '${file}' is not readable." )
     val fileBytes = file.contentsAsByteArray
 
-    borrow( mkConn( wsUrl, s"${contractAddress}/doc-store/post" ) )( _.disconnect() ) { conn =>
+    val path = {
+      val base = s"${contractAddress}/doc-store/post"
+      if ( pub ) {
+        base + s"?${Metadata.Key.Visibility}=public"
+      }
+      else {
+        base
+      }
+    }
+
+    borrow( mkConn( wsUrl, path ) )( _.disconnect() ) { conn =>
       conn.setRequestMethod( "POST" )
       conn.setRequestProperty( "Content-Type", contentType )
       conn.setDoInput( true )
