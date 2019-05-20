@@ -5,6 +5,8 @@ import java.util.Properties
 
 import scala.collection._
 
+import com.mchange.sc.v1.consuela.ethereum.{EthHash => ConsuelaEthHash}
+
 // we could (previously did) share the definitions of Forbidden and Error, but it's just easier
 // to read with repetitive, scoped definitions.
 
@@ -31,6 +33,9 @@ object DocStore {
   }
   sealed trait PutCheck
 
+  final object Hasher {
+    val EthHash : Hasher = ( data : immutable.Seq[Byte] ) => ConsuelaEthHash.hash( data ).bytes
+  }
   type Hasher = immutable.Seq[Byte] => immutable.Seq[Byte] // data => hash
 
   final object PutApprover {

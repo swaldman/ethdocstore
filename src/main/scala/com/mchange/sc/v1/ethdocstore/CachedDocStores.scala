@@ -143,7 +143,7 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
   private final object DocRecordSeqCache extends MiniCache[EthAddress,Option[Future[immutable.Seq[DocRecord]]]] {
     protected val manager = new MiniCache.OptFutManager[EthAddress,immutable.Seq[DocRecord]] {
       def _recreateFromKey( address : EthAddress ) : Option[Future[immutable.Seq[DocRecord]]] = {
-        docStores.get( address ) map { _ =>
+        docStores.get( address ) map { docStore =>
           implicit val sender = stub.Sender.Default
 
           val docHashStore = docHashStores( address )
@@ -157,7 +157,13 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
                   timestamp   <- docHashStore.constant.timestamp( docHash )
                 }
                 yield {
-                  DocRecord( docHash, name, description, timestamp )
+                  val metadata = {
+                    docStore.get( docHash.widen ) match {
+                      case GetResponse.Success( _, md ) => md
+                      case _                            => new Properties()
+                    }
+                  }
+                  DocRecord( docHash, name, description, timestamp, metadata )
                 }
               }
             }
@@ -260,9 +266,9 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
             subscriptionRef.get.foreach( _.cancel() )
             drop( address )
           }
-          case evt @ Authorized( userAddress )   =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
-          case evt @ Deauthorized( userAddress ) =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
-          case _ => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
+          case evt @ Authorized( userAddress )   => markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
+          case evt @ Deauthorized( userAddress ) => markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
+          case _                                 => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
         }
       }
       def onSubscribe(s : Subscription) = {

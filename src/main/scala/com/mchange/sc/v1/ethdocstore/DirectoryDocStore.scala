@@ -23,7 +23,7 @@ object DirectoryDocStore {
 
   implicit lazy val logger = mlogger(this)
 
-  def apply( dir : File, hasher : DocStore.Hasher, putApprover : DocStore.PutApprover = PutApprover.AlwaysSucceed, postPutHook : PostPutHook = PostPutHook.NoOp )( implicit ec : ExecutionContext ) : Failable[DirectoryDocStore] = {
+  def apply( dir : File, hasher : DocStore.Hasher = DocStore.Hasher.EthHash, putApprover : DocStore.PutApprover = PutApprover.AlwaysSucceed, postPutHook : PostPutHook = PostPutHook.NoOp )( implicit ec : ExecutionContext ) : Failable[DirectoryDocStore] = {
     Failable ( new DirectoryDocStore( dir.getCanonicalFile, hasher, putApprover, postPutHook )( ec ) )
   }
   final case class PutRecord( dir : File, hash : immutable.Seq[Byte], data : immutable.Seq[Byte], metadata : Properties, dataFile : File, metadataFile : File )
