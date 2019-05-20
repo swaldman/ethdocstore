@@ -17,7 +17,7 @@ enablePlugins(JavaAppPackaging)
 // settings and projects
 
 ThisBuild / organization := "com.mchange"
-ThisBuild / version := "0.0.1-SNAPSHOT"
+ThisBuild / version := "0.0.3-SNAPSHOT"
 ThisBuild / resolvers += ("releases" at nexusReleases)
 ThisBuild / resolvers += ("snapshots" at nexusSnapshots)
 ThisBuild / publishTo := {
@@ -27,7 +27,7 @@ ThisBuild / publishTo := {
 lazy val root = (project in file(".")).settings (
   name := "ethdocstore",
   libraryDependencies ++= Seq(
-    "com.mchange" %% "consuela" % "0.0.13",
+    "com.mchange" %% "consuela" % "0.0.15-SNAPSHOT" changing(),
     "com.mchange" %% "mchange-commons-scala" % "0.4.10-SNAPSHOT" changing(),
     "com.mchange" %% "failable" % "0.0.3",
     "com.lihaoyi" %% "scalatags" % "0.6.7",
@@ -36,7 +36,8 @@ lazy val root = (project in file(".")).settings (
     "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-http-xml"        % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-stream"          % akkaVersion,
-    "com.typesafe" % "config" % "1.3.4"
+    "com.typesafe" % "config"  % "1.3.4",
+    "org.mindrot"  % "jbcrypt" % "0.4"
   ),
   libraryDependencies ++= Seq(
     "io.circe" %% "circe-core",
@@ -53,5 +54,5 @@ lazy val root = (project in file(".")).settings (
 lazy val clientPlugin = (project in file("client-plugin")).dependsOn(root).settings (
   name := "ethdocstore-client-plugin",
   sbtPlugin := true,
-  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.10")
+  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.12-SNAPSHOT")
 )
