@@ -37,37 +37,58 @@ import _root_.io.circe._, _root_.io.circe.generic.auto._, _root_.io.circe.generi
 object EthDocStoreSbtPlugin extends AutoPlugin {
 
   object autoImport {
-    val webServiceUrl       = settingKey[String]("URL of the ethdocstore web service.")
-    val docHashStoreAddress = settingKey[String]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
+    val docstoreWebServiceUrl    = settingKey[String]("URL of the ethdocstore web service.")
+    val docstoreHashStoreAddress = settingKey[String]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
 
-    val ingestFilePdf = taskKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage, marks as a PDF file.")
-    val registerUser  = taskKey[Unit]("Registers a user, associating the username with the current sender Ethereum address.")
+    val docstoreIngestFile   = inputKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage.")
+    val docstoreRegisterUser = taskKey[Unit] ("Registers a user, associating the username with the current sender Ethereum address.")
   }
 
   import autoImport._
 
   lazy val defaults : Seq[sbt.Def.Setting[_]] = Seq(
-    Compile / ingestFilePdf := { ingestFileTask( "application/pdf" )( Compile ).value },
-    Compile / registerUser  := { registerUserTask( Compile ).value }
+    Compile / docstoreIngestFile := { docstoreIngestFileTask( Compile ).evaluated },
+    Compile / docstoreRegisterUser  := { docstoreRegisterUserTask( Compile ).value }
   )
 
-  private def ingestFileTask( contentType : String )( config : Configuration ) : Initialize[Task[EthHash]] = Def.task {
+  val KnownTypes = immutable.Map (
+    "text" -> "text/plain",
+    "pdf"  -> "application/pdf",
+    "jpeg" -> "image/jpeg",
+    "tiff" -> "image/tiff",
+    "html" -> "text/html",
+    "zip"  -> "application/zip"
+  )
+
+  val KnownTypeParser = KnownTypes.keySet.map( literal ).reduceLeft( _ | _ ).map( KnownTypes.apply )
+
+  val MimeTypeParser = {
+    for {
+      main <- Letter.+.string
+      _    <- literal("/")
+      sub  <- NotSpace
+    }
+    yield {
+      s"${main}/${sub}"
+    }
+  }.examples("*/*")
+
+  val ContentTypeParser = {
+    for {
+      _  <- SpaceClass.+
+      ct <- (KnownTypeParser | MimeTypeParser)
+    }
+    yield {
+      ct
+    }
+  }
+
+  private def docstoreIngestFileTask( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
     val is = interactionService.value
     val log = streams.value.log
-    val wsUrl = webServiceUrl.value
+    val wsUrl = docstoreWebServiceUrl.value
 
-    /*
-    val ( name, description, filePath, mbPublic ) = {
-      for {
-        n <- Space ~> token(NotSpace, "<name>")
-        d <- Space ~> token(StringEscapable, "<quoted-description>")
-        fp <- Space ~> token(StringEscapable,"<file-path>")
-        mp <- Space ~> token(literal("public").?, "[public]")
-      } yield {
-        ( n, d, fp, mp )
-      }
-    }.parsed
-     */
+    val contentType = ContentTypeParser.parsed
 
     val file = queryMandatoryGoodFile( is, "Full path to file: ", file => (file.exists() && file.isFile() && file.canRead()), file => s"${file} does not exist, is not readable, or is not a regular file." ).getAbsoluteFile()
 
@@ -80,7 +101,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
 
     val public = queryYN( is, "Should this file be public? " )
 
-    val contractAddress = docHashStoreAddress.value
+    val contractAddress = docstoreHashStoreAddress.value
 
     val hash = doStoreFile( log, wsUrl, contractAddress, contentType, file, public )
 
@@ -94,42 +115,24 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     EthHash.withBytes( hash.widen )
   }
 
-  private def throwCantReadInteraction = throw new Exception("Can't read interaction!")
-
-  private def registerUserTask( config : Configuration ) : Initialize[Task[Unit]] = Def.task {
+  private def docstoreRegisterUserTask( config : Configuration ) : Initialize[Task[Unit]] = Def.task {
     val is = interactionService.value
     val log = streams.value.log
-    val wsUrl = webServiceUrl.value
+    val wsUrl = docstoreWebServiceUrl.value
     val chainId = (config / ethNodeChainId).value
     val ( _, ssender ) = ( config / xethStubEnvironment ).value
 
     val registrationAddress = ssender.address
 
-    val addressOkay = {
-      is.readLine( s"You would be registering as '0x${registrationAddress.hex}'. Is that okay? [y/n] ", false )
-        .getOrElse( throwCantReadInteraction )
-        .trim()
-        .equalsIgnoreCase("y")
-    }
+    val addressOkay = queryYN( is, s"You would be registering as '0x${registrationAddress.hex}'. Is that okay? [y/n] " )
     if (addressOkay) {
-      val username = {
-        is.readLine( s"Username: ", false )
-          .getOrElse( throwCantReadInteraction )
-          .trim()
-      }
+      val username = assertReadLine( is, s"Username: ", false ).trim()
 
       @tailrec
       def fetchPassword : String = {
-        val password = {
-          is.readLine( s"Password: ", true )
-            .getOrElse( throwCantReadInteraction )
-            .trim()
-        }
-        val confirmation = {
-          is.readLine( s"Confirm password: ", true )
-            .getOrElse( throwCantReadInteraction )
-            .trim()
-        }
+        val password     = assertReadLine( is, s"Password: ", true ).trim()
+        val confirmation = assertReadLine( is, s"Confirm password: ", true ).trim()
+
         if ( password != confirmation ) {
           log.warn("The password and confirmation do not match! Try again!")
           fetchPassword
