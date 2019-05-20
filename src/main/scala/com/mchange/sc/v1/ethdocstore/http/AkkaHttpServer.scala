@@ -478,7 +478,7 @@ class AkkaHttpServer(
                   val mbVisibility = Option( metadata.getProperty(Metadata.Key.Visibility) )
                   mbVisibility match {
                     case Some( "public" ) => raw("")
-                    case _                => raw(" &#128272;")
+                    case _                => raw(" &#128274;")
                   }
                 }
                 li (

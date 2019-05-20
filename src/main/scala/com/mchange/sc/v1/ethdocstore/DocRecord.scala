@@ -7,13 +7,16 @@ import com.mchange.sc.v1.consuela.ethereum.stub.sol
 
 import java.util.Properties
 
+import scala.collection.JavaConverters._
+
 object DocRecord {
   implicit val docRecordEncoder : Encoder[DocRecord] = new Encoder[DocRecord] {
     final def apply( dr : DocRecord ): Json = Json.obj(
       ("docHash", Json.fromString( dr.docHash.widen.hex )),
       ("name", Json.fromString( dr.name )),
       ("description", Json.fromString( dr.description )),
-      ("timestamp", Json.fromBigInt( dr.timestamp.widen ))
+      ("timestamp", Json.fromBigInt( dr.timestamp.widen )),
+      ("metadata", Json.fromFields( dr.metadata.asScala.map { case (k,v) => (k, Json.fromString(v)) } ))
     )
   }
 }
