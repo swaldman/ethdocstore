@@ -180,7 +180,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     }
   }
 
-  private def doRegister( log : sbt.Logger, wsUrl : String, username : String, password : String, challenge : immutable.Seq[Byte], signature : EthSignature.Abstract, registrationAddress : EthAddress) : Boolean = {
+  private def doRegister( log : sbt.Logger, wsUrl : String, username : String, password : String, challenge : immutable.Seq[Byte], signature : EthSignature, registrationAddress : EthAddress) : Boolean = {
     val registration = Registration( username, password, challenge.hex, signature.rsvBytes.hex, registrationAddress.hex )
     borrow( mkConn( wsUrl, "register" ) )( _.disconnect() ) { conn =>
       conn.setRequestMethod( "POST" )

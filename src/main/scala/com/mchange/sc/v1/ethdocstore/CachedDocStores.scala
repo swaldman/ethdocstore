@@ -260,8 +260,8 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
             subscriptionRef.get.foreach( _.cancel() )
             drop( address )
           }
-          case evt @ Authorized( userAddress, _, _ )   =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
-          case evt @ Deauthorized( userAddress, _, _ ) =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
+          case evt @ Authorized( userAddress )   =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
+          case evt @ Deauthorized( userAddress ) =>  markDirtyUserCanUpdate( evt.sourceAddress, userAddress )
           case _ => DEBUG.log( s"${this} encountered and ignored event ${evt}" )
         }
       }
