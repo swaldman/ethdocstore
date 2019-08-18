@@ -1,8 +1,8 @@
-* Finish implementation of file access authentication
-* Implement client-side register
-* Implement client-settable visibility
-* Handle more content types
-* Use interaction rather than a long command line for ingests
+* Support nicer page titles and desriptions
+* Show metainfo about whether open or closed, date range, etc.
+* Implement `docstoreAmend` via webservice (with appropriate resetting of cache)
+* Implement user-only permissions for webservice created directories and files
+  - Maybe enforce such permissions on webservice app startup
 * Streaming / chinking large uploads as well as downloads
 * Implement client-side hash verification
   - Don't think a server-side recheck is worth it
