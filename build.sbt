@@ -17,7 +17,7 @@ enablePlugins(JavaAppPackaging)
 // settings and projects
 
 ThisBuild / organization := "com.mchange"
-ThisBuild / version := "0.0.3"
+ThisBuild / version := "0.0.4-SNAPSHOT"
 ThisBuild / resolvers += ("releases" at nexusReleases)
 ThisBuild / resolvers += ("snapshots" at nexusSnapshots)
 ThisBuild / publishTo := {
