@@ -148,7 +148,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
       val signature = ssender.findSigner().sign( challenge, EthChainId( chainId ) )
       val registered = doRegister( log, wsUrl, username, password, challenge, signature, registrationAddress )
       if ( registered ) {
-        log.info( s"User '${username}' successfully registered as ''0x${registrationAddress.hex}'." )
+        log.info( s"User '${username}' successfully registered as '0x${registrationAddress.hex}'." )
       }
       else {
         log.error("Registration failed!")
