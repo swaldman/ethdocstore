@@ -27,8 +27,8 @@ ThisBuild / publishTo := {
 lazy val root = (project in file(".")).settings (
   name := "ethdocstore",
   libraryDependencies ++= Seq(
-    "com.mchange" %% "consuela" % "0.0.15-SNAPSHOT" changing(),
-    "com.mchange" %% "mchange-commons-scala" % "0.4.10-SNAPSHOT" changing(),
+    "com.mchange" %% "consuela" % "0.0.15",
+    "com.mchange" %% "mchange-commons-scala" % "0.4.10",
     "com.mchange" %% "failable" % "0.0.3",
     "com.lihaoyi" %% "scalatags" % "0.6.7",
     "com.mchange"    %% "mlog-scala"            % "0.3.11",
