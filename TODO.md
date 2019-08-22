@@ -1,3 +1,5 @@
+* Put locks before, rather than after, names for private docs (maybe in their own grid cell, for nice alignment)
+* Truncate name cells with ellipses
 * Support nicer page titles and desriptions
 * Show metainfo about whether open or closed, date range, etc.
 * Implement `docstoreAmend` via webservice (with appropriate resetting of cache)
