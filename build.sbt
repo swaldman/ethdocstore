@@ -58,7 +58,7 @@ lazy val root = (project in file(".")).settings (
 lazy val clientPlugin = (project in file("client-plugin")).dependsOn(root).settings (
   name := "ethdocstore-client-plugin",
   sbtPlugin := true,
-  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.15"),
+  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.16-SNAPSHOT"),
   pomExtra := pomExtraForProjectName( name.value )
 )
 
