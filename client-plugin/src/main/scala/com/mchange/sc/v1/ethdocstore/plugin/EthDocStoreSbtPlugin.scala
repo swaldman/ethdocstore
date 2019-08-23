@@ -93,36 +93,18 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     }
   }
 
-  val AuthorizeSelector : immutable.Seq[Byte] = "0x0xb6a5d7de".decodeHexAsSeq
-
-  private def authorizeMessage( address : EthAddress ) : immutable.Seq[Byte] = {
-    AuthorizeSelector ++ (address.bytes.widen : immutable.Seq[Byte])
-  }
-
   private def docstoreAuthorizeAddressTask( config : Configuration ) : Initialize[InputTask[Unit]] = {
     val parser = Defaults.loadForParser(config / xethFindCacheRichParserInfo)( genAddressParser("<authorized-address>") )
 
     Def.inputTask {
       val log = streams.value.log
-      val hashStore = EthAddress( docstoreHashStoreAddress.value )
-      val nonceOverride = ethTransactionNonceOverrideValue.value
       implicit val ( scontext, sender ) = xethStubEnvironment.value
-      implicit val icontext = scontext.icontext
-      implicit val econtext = icontext.econtext
-
-      val authorizedAddress = parser.parsed
-
-      log.info("Preparing authorization transaction." )
-      val f_out = jsonrpc.Invoker.transaction.sendMessage( sender.findSigner(), hashStore, Zero256, authorizeMessage( authorizedAddress ), nonceOverride.map( Unsigned256.apply ) ) flatMap { txnHash =>
-        log.info( s"""Sending authorization request for identity '${formatHex(authorizedAddress)}' to address '0x${hashStore.hex}' in transaction '0x${txnHash.hex}'.""" )
-        jsonrpc.Invoker.futureTransactionReceipt( txnHash )
-      } map { receipt =>
-        receipt.status match {
-          case Some( One256 ) => log.info("The authorization transaction has succeeded." )
-          case _ => log.warn( "Unexpected transaction status. Something seems to have gone wrong." )
-        }
-      }
-      Await.result( f_out, Duration.Inf ) // we use Duration.Inf because the Future will throw an Exception internally on a timeout
+      val hashStoreAddress = EthAddress( docstoreHashStoreAddress.value )
+      val hashStore = DocHashStore( hashStoreAddress )
+      val nonce = stub.Nonce( ethTransactionNonceOverrideValue.value.map( sol.UInt256.apply ) )
+      val authorizee = parser.parsed
+      hashStore.txn.authorize( authorizee, nonce )
+      log.info( s"Address '${formatHex(authorizee)}' has been successfully authorized on the DocHashStore at address '${formatHex(hashStoreAddress)}'." )
     }
   }
   private def docstoreIngestFileTask( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
