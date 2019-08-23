@@ -98,10 +98,10 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
 
     Def.inputTask {
       val log = streams.value.log
-      implicit val ( scontext, sender ) = xethStubEnvironment.value
-      val hashStoreAddress = EthAddress( docstoreHashStoreAddress.value )
+      implicit val ( scontext, sender ) = ( config / xethStubEnvironment).value
+      val hashStoreAddress = EthAddress( ( config / docstoreHashStoreAddress ).value )
       val hashStore = DocHashStore( hashStoreAddress )
-      val nonce = stub.Nonce( ethTransactionNonceOverrideValue.value.map( sol.UInt256.apply ) )
+      val nonce = stub.Nonce( ( config / ethTransactionNonceOverrideValue).value.map( sol.UInt256.apply ) )
       val authorizee = parser.parsed
       hashStore.txn.authorize( authorizee, nonce )
       log.info( s"Address '${formatHex(authorizee)}' has been successfully authorized on the DocHashStore at address '${formatHex(hashStoreAddress)}'." )
