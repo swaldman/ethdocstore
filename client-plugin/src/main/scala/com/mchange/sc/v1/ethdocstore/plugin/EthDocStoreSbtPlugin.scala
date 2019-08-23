@@ -4,6 +4,8 @@ import com.mchange.sc.v1.ethdocstore.{Metadata,Registration}
 import com.mchange.sc.v1.ethdocstore.contract.DocHashStore
 
 import com.mchange.sc.v1.sbtethereum.api.Interaction._
+import com.mchange.sc.v1.sbtethereum.api.Parsers._
+import com.mchange.sc.v1.sbtethereum.api.Formatting._
 
 
 import sbt._
@@ -19,6 +21,8 @@ import java.nio.charset.StandardCharsets
 
 import scala.annotation.tailrec
 import scala.collection._
+import scala.concurrent.{Await,Future}
+import scala.concurrent.duration._
 
 import com.mchange.sc.v1.sbtethereum.SbtEthereumPlugin
 import com.mchange.sc.v1.sbtethereum.SbtEthereumPlugin.autoImport._
@@ -29,17 +33,22 @@ import com.mchange.sc.v2.io._
 import com.mchange.sc.v2.lang._
 
 import com.mchange.sc.v1.consuela._
-import com.mchange.sc.v1.consuela.ethereum.{stub, EthAddress, EthChainId, EthHash, EthSignature}
+import com.mchange.sc.v1.consuela.ethereum.{jsonrpc, stub, EthAddress, EthChainId, EthHash, EthSignature}
+import com.mchange.sc.v1.consuela.ethereum.specification.Types.Unsigned256
 import stub.sol
 
 import _root_.io.circe._, _root_.io.circe.generic.auto._, _root_.io.circe.generic.semiauto._, _root_.io.circe.parser._, _root_.io.circe.syntax._
 
 object EthDocStoreSbtPlugin extends AutoPlugin {
 
+  val Zero256 = sol.UInt256(0)
+  val One256  = sol.UInt256(1)
+
   object autoImport {
     val docstoreWebServiceUrl    = settingKey[String]("URL of the ethdocstore web service.")
     val docstoreHashStoreAddress = settingKey[String]("Address of the DocHashStore contract (under the session Chain ID and Node URL).")
 
+    val docstoreAuthorizeAddress = inputKey[Unit]("Adds an address to the list of identities permitted to upload hashes and amend metadata on the DocHashStore")
     val docstoreIngestFile   = inputKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage.")
     val docstoreRegisterUser = taskKey[Unit] ("Registers a user, associating the username with the current sender Ethereum address.")
   }
@@ -47,6 +56,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
   import autoImport._
 
   lazy val defaults : Seq[sbt.Def.Setting[_]] = Seq(
+    Compile / docstoreAuthorizeAddress := { docstoreAuthorizeAddressTask( Compile ).evaluated },
     Compile / docstoreIngestFile := { docstoreIngestFileTask( Compile ).evaluated },
     Compile / docstoreRegisterUser  := { docstoreRegisterUserTask( Compile ).value }
   )
@@ -83,6 +93,38 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     }
   }
 
+  val AuthorizeSelector : immutable.Seq[Byte] = "0x0xb6a5d7de".decodeHexAsSeq
+
+  private def authorizeMessage( address : EthAddress ) : immutable.Seq[Byte] = {
+    AuthorizeSelector ++ (address.bytes.widen : immutable.Seq[Byte])
+  }
+
+  private def docstoreAuthorizeAddressTask( config : Configuration ) : Initialize[InputTask[Unit]] = {
+    val parser = Defaults.loadForParser(config / xethFindCacheRichParserInfo)( genAddressParser("<authorized-address>") )
+
+    Def.inputTask {
+      val log = streams.value.log
+      val hashStore = EthAddress( docstoreHashStoreAddress.value )
+      val nonceOverride = ethTransactionNonceOverrideValue.value
+      implicit val ( scontext, sender ) = xethStubEnvironment.value
+      implicit val icontext = scontext.icontext
+      implicit val econtext = icontext.econtext
+
+      val authorizedAddress = parser.parsed
+
+      log.info("Preparing authorization transaction." )
+      val f_out = jsonrpc.Invoker.transaction.sendMessage( sender.findSigner(), hashStore, Zero256, authorizeMessage( authorizedAddress ), nonceOverride.map( Unsigned256.apply ) ) flatMap { txnHash =>
+        log.info( s"""Sending authorization request for identity '${formatHex(authorizedAddress)}' to address '0x${hashStore.hex}' in transaction '0x${txnHash.hex}'.""" )
+        jsonrpc.Invoker.futureTransactionReceipt( txnHash )
+      } map { receipt =>
+        receipt.status match {
+          case Some( One256 ) => log.info("The authorization transaction has succeeded." )
+          case _ => log.warn( "Unexpected transaction status. Something seems to have gone wrong." )
+        }
+      }
+      Await.result( f_out, Duration.Inf ) // we use Duration.Inf because the Future will throw an Exception internally on a timeout
+    }
+  }
   private def docstoreIngestFileTask( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
     val is = interactionService.value
     val log = streams.value.log
