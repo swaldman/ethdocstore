@@ -1,6 +1,8 @@
 ethdocstore {
   contracts {
     0x824c8956bfb388e51c2b3836d4bbf99f70120224 {
+      name            = "Sample Doc Store"
+      description     = "This is just a sample. There is nothing really here."
       defaultToPublic = false
       postPutHook     = "GitAddCommitPush"
     }

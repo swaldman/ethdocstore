@@ -1,6 +1,7 @@
 package com.mchange.sc.v1.ethdocstore
 
 import java.io.BufferedInputStream
+import java.time.Instant
 import java.util.Properties
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,6 +22,8 @@ import DocStore.GetResponse
 
 object CachedDocStores {
   lazy implicit val logger = mlogger(this)
+
+  val Zero256 = sol.UInt256(0)
 
   final case class DocKey( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] )
 
@@ -80,7 +83,7 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
 
   private val storeWatcher = new StoreWatcher() // don't construct lazily, so we get publishers set up
 
-  private lazy val miniCaches : List[MiniCache[_,_]] = GetResponseCache :: DocRecordSeqCache :: HandleDataCache :: Nil
+  private lazy val miniCaches : List[MiniCache[_,_]] = GetResponseCache :: OpenCloseCache :: DocRecordSeqCache :: HandleDataCache :: Nil
 
   def attemptSynchronousMetadata( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Properties] = {
     attemptGetResponse( docStoreAddress, docHash ) flatMap { f_gr =>
@@ -94,6 +97,10 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
   def attemptGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Option[Future[DocStore.GetResponse]] = GetResponseCache.find( DocKey( docStoreAddress, docHash ) )
 
   def markDirtyGetResponse( docStoreAddress : EthAddress, docHash : immutable.Seq[Byte] ) : Unit = GetResponseCache.markDirty( DocKey( docStoreAddress, docHash ) )
+
+  def attemptOpenClose( docStoreAddress : EthAddress ) : Option[Future[Tuple2[Instant,Option[Instant]]]] = OpenCloseCache.find( docStoreAddress )
+
+  def markDirtyOpenClose( docStoreAddress : EthAddress ) : Unit = OpenCloseCache.markDirty( docStoreAddress )
 
   def attemptDocRecordSeq( docStoreAddress : EthAddress ) : Option[Future[immutable.Seq[DocRecord]]] = DocRecordSeqCache.find( docStoreAddress )
 
@@ -135,6 +142,27 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
               }
             }
           )
+        }
+      }
+    }
+  }
+
+  private final object OpenCloseCache extends MiniCache[EthAddress,Option[Future[Tuple2[Instant,Option[Instant]]]]] {
+    protected val manager = new MiniCache.OptFutManager[EthAddress,Tuple2[Instant,Option[Instant]]] {
+      def _recreateFromKey( address : EthAddress ) : Option[Future[Tuple2[Instant,Option[Instant]]]] = {
+        docStores.get( address ) map { docStore =>
+          implicit val sender = stub.Sender.Default
+
+          val docHashStore = docHashStores( address )
+          for {
+            openTime <- docHashStore.constant.openTime
+            closeTime <- docHashStore.constant.closeTime
+          }
+          yield {
+            val open = Instant.ofEpochSecond( openTime.widen.toLong )
+            val close = if ( closeTime == Zero256 ) None else Some( Instant.ofEpochSecond( closeTime.widen.toLong ) )
+            Tuple2( open, close )
+          }
         }
       }
     }
@@ -263,6 +291,7 @@ class CachedDocStores( docStores : immutable.Map[EthAddress,DocStore], nodeInfo 
         evt match {
           case _ : Stored | _ : Amended => markDirtyDocRecordSeq( address )
           case _ : Closed => {
+            markDirtyOpenClose( address )
             subscriptionRef.get.foreach( _.cancel() )
             drop( address )
           }

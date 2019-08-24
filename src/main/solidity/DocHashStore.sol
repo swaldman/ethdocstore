@@ -13,7 +13,7 @@ contract DocHashStore {
   event Stored( bytes32 docHash, uint timestamp, string name, string description, address filer );
   event Amended( bytes32 docHash, string name, string description, address updater, uint priorUpdateBlockNumber );
   event Opened( address admin, uint timestamp );
-  event Closed( address closer, uint timestap );
+  event Closed( address closer, uint timestamp );
   event Authorized( address user );
   event Deauthorized( address user );
 

@@ -45,7 +45,7 @@ import scala.concurrent.{Await,ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 
 import java.io.{BufferedInputStream, IOException, File}
-import java.time.{Instant, ZonedDateTime, ZoneOffset}
+import java.time.{Instant, ZonedDateTime, ZoneId, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.nio.charset.StandardCharsets
@@ -62,7 +62,9 @@ object AkkaHttpServer {
 
   private val EthAddressRegex = """(?:0x)?\p{XDigit}{40}""".r
 
-  case class DocStoreRecord( localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook )
+  private val InstantFormatter = DateTimeFormatter.RFC_1123_DATE_TIME.withZone( ZoneId.systemDefault() )
+
+  case class DocStoreRecord( contractAddress : EthAddress, localDir : File, defaultToPublic : Boolean, postPutHook : DirectoryDocStore.PostPutHook, contractName : Option[String], contractDescription : Option[String] )
 
   case class RegisterRequest( challengeHex : String, challengeSignatureRSVHex : String, userName : String, password : String )
 
@@ -105,14 +107,18 @@ object AkkaHttpServer {
           val dir = new File( dataDir, id )
           ensureDir( id, dir )
         }
-        val pphKey   = s"${contractKey}.postPutHook"
-        val postPutHook = if ( contractConfig.hasPath( pphKey ) ) DirectoryDocStore.PostPutHook( contractConfig.getString( pphKey) ) else DirectoryDocStore.PostPutHook.NoOp
+        val pphKey = s"${contractKey}.postPutHook"
+        val postPutHook = if ( contractConfig.hasPath( pphKey ) ) DirectoryDocStore.PostPutHook( contractConfig.getString( pphKey ) ) else DirectoryDocStore.PostPutHook.NoOp
         val dtpublicKey = s"${contractKey}.defaultToPublic"
         val defaultToPublic = if ( contractConfig.hasPath( dtpublicKey ) ) contractConfig.getBoolean( dtpublicKey ) else false
+        val contractNameKey = s"${contractKey}.name"
+        val contractName = if ( contractConfig.hasPath( contractNameKey ) ) Some( contractConfig.getString( contractNameKey ) ) else None
+        val contractDescKey = s"${contractKey}.description"
+        val contractDesc = if ( contractConfig.hasPath( contractDescKey ) ) Some( contractConfig.getString( contractDescKey ) ) else None
 
-        ( contractAddress, DocStoreRecord( contractDir, defaultToPublic, postPutHook ) )
+        ( contractAddress, DocStoreRecord( contractAddress, contractDir, defaultToPublic, postPutHook, contractName, contractDesc ) )
       }.toSeq
-      immutable.Map( tuples : _* )
+      immutable.SortedMap( tuples : _* )( Ordering.by( _.hex ) )
     }
 
     val authProperties = {
@@ -142,7 +148,7 @@ class AkkaHttpServer(
   iface : String,
   port : Int,
   authProperties : File,
-  docStoreRecords : immutable.Map[EthAddress, AkkaHttpServer.DocStoreRecord],
+  docStoreRecords : immutable.SortedMap[EthAddress, AkkaHttpServer.DocStoreRecord],
   cacheableDataMaxBytes : Long,
   nodeInfo : NodeInfo,
   mbPathToApp : Option[String]
@@ -167,7 +173,7 @@ class AkkaHttpServer(
     if ( len > 1 ) Some( prefix.substring(1, len-1) ) else None
   }
 
-  private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(dir, _, hook) ) => ( address, DirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
+  private lazy val docStores = docStoreRecords.map { case ( address, DocStoreRecord(_, dir, _, hook, _, _) ) => ( address, DirectoryDocStore( dir, postPutHook = hook )( ExecutionContext.global ).assert ) }
 
   private lazy val caches = new CachedDocStores( docStores, nodeInfo, cacheableDataMaxBytes )
 
@@ -186,7 +192,8 @@ class AkkaHttpServer(
       implicit val ec = ctx.executionContext
       implicit val sender = stub.Sender.Default
 
-      def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toVector
+      def docStoreRecSeq = docStoreRecords.values.toVector
+      // def addressSeq = (immutable.SortedSet.empty[String] ++ docStoreRecords.keySet.map( _.hex )).toVector
 
       concat(
         pathPrefix("test") {
@@ -250,19 +257,25 @@ class AkkaHttpServer(
         },
         pathPrefix("index.html") {
           complete {
-            produceMainIndex( addressSeq )
+            produceMainIndex( docStoreRecSeq )
           }
         },
         pathPrefix("") { // is there a better way to specify the path "/"?
           pathEnd {
             complete {
-              produceMainIndex( addressSeq )
+              produceMainIndex( docStoreRecSeq )
             }
           }
         },
         path("docHashStores.json"){
           complete {
-            Future( HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/json`, addressSeq.asJson.noSpaces ) ) )
+            val jsonable = {
+              docStoreRecSeq.map { rec =>
+                val raw = "contractAddress" -> Some( "0x" + rec.contractAddress.hex ) :: "contractName" -> rec.contractName :: "contractDescription" -> rec.contractDescription :: Nil
+                raw.filter( _._2.nonEmpty ).toMap.mapValues( _.get )
+              }
+            }
+            Future( HttpResponse( status = StatusCodes.OK, entity = HttpEntity( `application/json`, jsonable.asJson.noSpaces ) ) )
           }
         },
         pathPrefix("assets") {
@@ -308,6 +321,7 @@ class AkkaHttpServer(
                 }
                 case Some( docStore ) => {
                   def fseq : Future[immutable.Seq[DocRecord]] = caches.attemptDocRecordSeq( address ).get // this should be availble, we've checked address first
+                  def fopenClosed : Future[Tuple2[Instant,Option[Instant]]] = caches.attemptOpenClose( address ).get
                   concat(
                     pathPrefix("doc-store") {
                       concat(
@@ -415,7 +429,8 @@ class AkkaHttpServer(
                     },
                     pathPrefix("index.html") {
                       complete {
-                        produceDocStoreIndex( address, fseq )
+                        val dsr = docStoreRecords( address ) // address has already been checked, this should exist
+                        produceDocStoreIndex( address, dsr.contractName, dsr.contractDescription, fseq, fopenClosed )
                       }
                     }
                   )
@@ -456,69 +471,94 @@ class AkkaHttpServer(
     }
   }
 
-  private def produceDocStoreIndex( docStoreAddress : EthAddress, fseq : Future[immutable.Seq[DocRecord]] )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
+  private def produceDocStoreIndex(
+    docStoreAddress : EthAddress,
+    contractName : Option[String],
+    contractDesc : Option[String],
+    fseq : Future[immutable.Seq[DocRecord]],
+    fopenClosed : Future[Tuple2[Instant,Option[Instant]]]
+  )( implicit ec : ExecutionContext ) : Future[HttpResponse]= {
     import scalatags.Text.all._
     import scalatags.Text.tags2.title
-    fseq map { seq =>
-      val titleStr = s"Hashed Documents (${seq.length} found at 0x${docStoreAddress.hex})"
-      val text = {
-        html(
-          head(
-            title( titleStr ),
-            link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
-          ),
-          body(
-            h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
-            ol(
-              cls:="allDocHashes",
-              for {
+    fopenClosed flatMap { case ( openInstant, mbClosedInstant ) =>
+      fseq map { seq =>
+        val simpleTitle = contractName.getOrElse( "Hashed Documents" )
+        val titleStr = s"${simpleTitle}"
+        val timestamps = {
+          val openedPart = s"Opened ${InstantFormatter.format(openInstant)}, "
+          val closedPart = {
+            mbClosedInstant match {
+              case Some( instant ) => s"closed '${InstantFormatter.format(instant)}'."
+              case None            =>  "not yet closed."
+            }
+          }
+          openedPart + closedPart 
+        }
+        val text = {
+          html(
+            head(
+              title( titleStr ),
+              link(rel:="stylesheet", href:=s"${prefix}assets/css/index.css", `type`:="text/css; charset=utf-8"),
+            ),
+            body(
+              h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
+              p(
+                cls := "smaller",
+                i( s"Contract @ 0x${docStoreAddress.hex}, with ${seq.length} documents" ), br(),
+                i( timestamps ),
+              ),
+              contractDesc.fold( Nil : Seq[scalatags.Text.TypedTag[String]])( desc => Seq( p(desc) ) ), 
+              ul(
+                cls:="allDocHashes",
+                for {
                   DocRecord( docHash, name, description, timestamp, metadata ) <- seq
-              } yield {
-                def maybeLock( docHash : sol.Bytes32 ) = {
-                  val mbVisibility = Option( metadata.getProperty(Metadata.Key.Visibility) )
-                  mbVisibility match {
-                    case Some( "public" ) => raw("")
-                    case _                => raw(" &#128274;")
+                } yield {
+                  def maybeLock( docHash : sol.Bytes32 ) = {
+                    val mbVisibility = Option( metadata.getProperty(Metadata.Key.Visibility) )
+                    mbVisibility match {
+                      case Some( "public" ) => raw("&nbsp;")
+                      case _                => raw("&#128274;")
+                    }
                   }
-                }
-                li (
-                  div(
-                    cls:="docHashItems",
+                  li (
                     div(
-                      cls:="docHashName",
-                      a (
-                        href:=s"${prefix}0x${docStoreAddress.hex}/doc-store/get/${docHash.widen.hex}",
-                        name
-                      ),
-                      span (
-                        cls := "smaller",
+                      cls:="docHashItems",
+                      div (
+                        cls:="docHashVisibility",
                         maybeLock( docHash )
+                      ),
+                      div(
+                        cls:="docHashName",
+                        a (
+                          href:=s"${prefix}0x${docStoreAddress.hex}/doc-store/get/${docHash.widen.hex}",
+                          name
+                        )
+                      ),
+                      div(
+                        cls:="docHash",
+                        "0x"+docHash.widen.hex
+                      ),
+                      div(
+                        cls:="docHashTimestamp",
+                        DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
+                      ),
+                      div(
+                        cls:="docHashDescription",
+                        description
                       )
-                    ),
-                    div(
-                      cls:="docHash",
-                      "0x"+docHash.widen.hex
-                    ),
-                    div(
-                      cls:="docHashTimestamp",
-                      DateTimeFormatter.RFC_1123_DATE_TIME.format( ZonedDateTime.ofInstant( Instant.ofEpochSecond(timestamp.widen.toLong), ZoneOffset.UTC ) )
-                    ),
-                    div(
-                      cls:="docHashDescription",
-                      description
                     )
                   )
-                )
-              }
+                }
+              )
             )
           )
-        )
-      }.toString
-      HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
+        }.toString
+        HttpResponse( entity = HttpEntity( `text/html(UTF-8)`, text ) ).addHeader(`Cache-Control`(`no-cache`) )
+      }
     }
   }
 
-  def produceMainIndex( addressSeq: immutable.Seq[String] )( implicit ec : ExecutionContext ) = {
+  def produceMainIndex( docStoreRecSeq: immutable.Seq[DocStoreRecord] )( implicit ec : ExecutionContext ) = {
     Future {
       import scalatags.Text.all._
       import scalatags.Text.tags2.title
@@ -533,13 +573,20 @@ class AkkaHttpServer(
             h1( titleStr ),
             ul(
               for {
-                dhs <- addressSeq
+                dhs <- docStoreRecSeq
               } yield {
+                val mbNameSpan = {
+                  dhs.contractName match {
+                    case Some( name ) => span(raw(" &mdash; "), name)
+                    case None         => span()
+                  }
+                }
                 li(
                   a(
-                    href := s"${prefix}0x${dhs}/index.html",
-                    s"0x${dhs}"
-                  )
+                    href := s"${prefix}0x${dhs.contractAddress.hex}/index.html",
+                    s"0x${dhs.contractAddress.hex}",
+                  ),
+                  mbNameSpan
                 )
               }
             )

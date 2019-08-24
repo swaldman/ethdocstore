@@ -9,32 +9,22 @@ h1 {
 }
 .docHashItems {
     display: grid;
-    grid-template-columns: 25% 25% auto;
+    grid-template-columns: 1em 25% 25% auto;
     grid-template-rows: 1.75em auto;
     background-color: white;
     border: 2px solid black;
     margin-bottom: 3px;
     margin-right: 2em;
 }
-.docHashName {
+.docHashVisibility {
     grid-column: 1;
     grid-row:    1;
-    border-right: 1px solid gray;
-    border-bottom: 1px solid gray;
-    padding: 3px;
-}
-.docHash {
-    grid-column: 3;
-    grid-row:    1;
-    font-family: "Lucida Console", Monaco, monospace;
-    border-bottom: 1px solid gray;
-    padding: 3px;
+    padding-left: 3px;
+    padding-top: 3px;
+    padding-bottom: 3px;
     font-size: smaller;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow: hidden;
 }
-.docHashTimestamp {
+.docHashName {
     grid-column: 2;
     grid-row:    1;
     border-right: 1px solid gray;
@@ -44,11 +34,35 @@ h1 {
     white-space: nowrap;
     overflow: hidden;
 }
+.docHashTimestamp {
+    grid-column: 3;
+    grid-row:    1;
+    border-right: 1px solid gray;
+    border-bottom: 1px solid gray;
+    padding: 3px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.docHash {
+    grid-column: 4;
+    grid-row:    1;
+    font-family: "Lucida Console", Monaco, monospace;
+    border-bottom: 1px solid gray;
+    padding: 3px;
+    font-size: smaller;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+}
 .docHashDescription {
-    grid-column: 1 / span 3;
+    grid-column: 1 / span 4;
     grid-row:    2;
     padding: 3px;
     margin-left: 1em;
+}
+.allDocHashes {
+    list-style-type: none;
 }
 .smaller {
     font-size: smaller;
