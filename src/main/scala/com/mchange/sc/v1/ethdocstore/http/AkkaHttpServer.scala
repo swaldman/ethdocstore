@@ -504,8 +504,7 @@ class AkkaHttpServer(
               h1(id:="mainTitle", titleStr, " ", div( float:="right", a( href := s"${prefix}index.html", raw("&uarr;")))),
               p(
                 cls := "smaller",
-                i( s"Contract @ 0x${docStoreAddress.hex}, with ${seq.length} documents" ), br(),
-                i( timestamps ),
+                i( s"Contract @ 0x${docStoreAddress.hex}, with ${seq.length} documents. ${timestamps}" )
               ),
               contractDesc.fold( Nil : Seq[scalatags.Text.TypedTag[String]])( desc => Seq( p(desc) ) ), 
               ul(
