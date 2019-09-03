@@ -225,6 +225,7 @@ Any authorized users may also close a `DocHashStore`, rendering it read-only. (T
 ```
 
 **Example:***
+```
 > docstoreAuthorizeAddress 0xe92db74ce7c392634a1d9af344aeeb4a5f1e0a78
 
 ==> T R A N S A C T I O N   S I G N A T U R E   R E Q U E S T
