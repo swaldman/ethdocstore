@@ -17,7 +17,7 @@ enablePlugins(JavaAppPackaging)
 // settings and projects
 
 ThisBuild / organization := "com.mchange"
-ThisBuild / version := "0.0.4"
+ThisBuild / version := "0.0.5-SNAPSHOT"
 ThisBuild / resolvers += ("releases" at nexusReleases)
 ThisBuild / resolvers += ("snapshots" at nexusSnapshots)
 ThisBuild / publishTo := {
@@ -29,7 +29,7 @@ ThisBuild / scalaVersion := "2.12.9"
 lazy val root = (project in file(".")).settings (
   name := "ethdocstore",
   libraryDependencies ++= Seq(
-    "com.mchange" %% "consuela" % "0.0.15",
+    "com.mchange" %% "consuela" % "0.1.0-SNAPSHOT",
     "com.mchange" %% "mchange-commons-scala" % "0.4.10",
     "com.mchange" %% "failable" % "0.0.3",
     "com.lihaoyi" %% "scalatags" % "0.6.7",
@@ -58,7 +58,7 @@ lazy val root = (project in file(".")).settings (
 lazy val clientPlugin = (project in file("client-plugin")).dependsOn(root).settings (
   name := "ethdocstore-client-plugin",
   sbtPlugin := true,
-  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.1.16"),
+  addSbtPlugin("com.mchange" % "sbt-ethereum" % "0.2.0-SNAPSHOT"),
   pomExtra := pomExtraForProjectName( name.value )
 )
 

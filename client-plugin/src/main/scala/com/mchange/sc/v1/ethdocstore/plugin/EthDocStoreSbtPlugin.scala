@@ -52,7 +52,8 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     val docstoreAuthorizeAddress   = inputKey[Unit]("Adds an address to the list of identities permitted to upload hashes, amend metadata, and close the DocHashStore")
     val docstoreClose              = taskKey[Unit] ("Permently closes (rendering read only) this application's DocHashStore.")
     val docstoreDeauthorizeAddress = inputKey[Unit]("Removes an address from the list of identities permitted to upload hashes, amend metadata, and close the DocHashStore")
-    val docstoreIngestFile         = inputKey[Unit]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage.")
+    val docstoreHashFile           = inputKey[Unit]("Prints the hash of a file (for verification purposes).")
+    val docstoreIngestFile         = inputKey[EthHash]("Hashes a file, stores the hash in the DocHashStore, uploads the doc to web-based storage.")
     val docstoreRegisterUser       = taskKey[Unit] ("Registers a user, associating the username with the current sender Ethereum address.")
   }
 
@@ -63,6 +64,7 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
     Compile / docstoreAuthorizeAddress := { docstoreAuthorizeAddressTask( Compile ).evaluated },
     Compile / docstoreClose := { docstoreCloseTask( Compile ).value },
     Compile / docstoreDeauthorizeAddress := { docstoreDeauthorizeAddressTask( Compile ).evaluated },
+    Compile / docstoreHashFile := { docstoreHashFileTask( Compile ).evaluated },
     Compile / docstoreIngestFile := { docstoreIngestFileTask( Compile ).evaluated },
     Compile / docstoreRegisterUser  := { docstoreRegisterUserTask( Compile ).value }
   )
@@ -179,6 +181,15 @@ object EthDocStoreSbtPlugin extends AutoPlugin {
       hashStore.txn.deauthorize( deauthorizee, nonce )
       log.info( s"Address '${formatHex(deauthorizee)}' has been successfully deauthorized on the DocHashStore at address '${formatHex(hashStoreAddress)}'." )
     }
+  }
+  private def docstoreHashFileTask( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
+    val is = interactionService.value
+    val log = streams.value.log
+    val file = queryMandatoryGoodFile( is, "Full path to file: ", file => (file.exists() && file.isFile() && file.canRead()), file => s"${file} does not exist, is not readable, or is not a regular file." ).getAbsoluteFile()
+    val fileBytes = file.contentsAsByteArray
+    val hash = EthHash.hash( fileBytes )
+    log.info( s"The hash of this file is '${formatHex(hash)}'." )
+    hash
   }
   private def docstoreIngestFileTask( config : Configuration ) : Initialize[InputTask[EthHash]] = Def.inputTask {
     val is = interactionService.value

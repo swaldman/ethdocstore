@@ -1,4 +1,5 @@
 * Better formatted "cover page" showing the index of docstores served by the webapp
+* In CLI, better feedback warning of transaction submission wait (and potential timeout), and showing more information about the completed transaction.
 * Implement user-only permissions for webservice created directories and files
   - Maybe enforce such permissions on webservice app startup
 * Streaming / chinking large uploads as well as downloads
