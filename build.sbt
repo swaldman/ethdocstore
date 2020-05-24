@@ -24,16 +24,16 @@ ThisBuild / publishTo := {
   if (isSnapshot.value) Some("snapshots" at nexusSnapshots ) else Some("releases"  at nexusReleases )
 }
 
-ThisBuild / scalaVersion := "2.12.9"
+ThisBuild / scalaVersion := "2.12.10"
 
 lazy val root = (project in file(".")).settings (
   name := "ethdocstore",
   libraryDependencies ++= Seq(
-    "com.mchange" %% "consuela" % "0.1.0-SNAPSHOT",
-    "com.mchange" %% "mchange-commons-scala" % "0.4.10",
-    "com.mchange" %% "failable" % "0.0.3",
-    "com.lihaoyi" %% "scalatags" % "0.6.7",
-    "com.mchange"    %% "mlog-scala"            % "0.3.11",
+    "com.mchange" %% "consuela" % "0.3.2",
+    "com.mchange" %% "mchange-commons-scala"      % "0.4.12",
+    "com.mchange" %% "failable"                   % "0.0.5",
+    "com.lihaoyi" %% "scalatags"                  % "0.6.7",
+    "com.mchange" %% "mlog-scala"                 % "0.3.13",
     "com.typesafe.akka" %% "akka-http"            % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
     "com.typesafe.akka" %% "akka-http-xml"        % akkaHttpVersion,

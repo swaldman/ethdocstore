@@ -176,7 +176,15 @@ final class DirectoryDocStore private (
                 working.load( is )
               }
             }.xwarn("Error loading original metadata. It will be ignored and overwritten!")
-            working.putAll( metadata )
+            // working.putAll( metadata )
+
+            // workaround Scala 2.12 bug https://github.com/scala/bug/issues/10418
+            val iterator = metadata.stringPropertyNames().iterator()
+            while( iterator.hasNext() ) {
+              val key = iterator.next()
+              working.setProperty( key, metadata.getProperty( key ) )
+            }
+
             working
           }
           else {
